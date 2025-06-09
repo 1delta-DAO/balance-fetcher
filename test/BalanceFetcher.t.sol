@@ -89,4 +89,66 @@ contract BalanceFetcherTest is Test {
             console.log("Next user offset:", offset);
         }
     }
+
+    function testRevertZeroTokens() public {
+        bytes memory input = abi.encodePacked(
+            uint16(0), // numTokens
+            uint16(4), // numAddresses
+            abi.encodePacked(users[0], users[1], users[2], users[3]),
+            abi.encodePacked(tokens[0], tokens[1], tokens[2], tokens[3])
+        );
+
+        vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
+        (bool success,) = address(fetcher).call(input);
+    }
+
+    function testRevertZeroAddresses() public {
+        bytes memory input = abi.encodePacked(
+            uint16(4), // numTokens
+            uint16(0), // numAddresses
+            abi.encodePacked(users[0], users[1], users[2], users[3]),
+            abi.encodePacked(tokens[0], tokens[1], tokens[2], tokens[3])
+        );
+
+        vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
+        (bool success,) = address(fetcher).call(input);
+    }
+
+    function testRevertIncorrectInputLength() public {
+        // Missing one token address
+        bytes memory input = abi.encodePacked(
+            uint16(4), // numTokens
+            uint16(4), // numAddresses
+            abi.encodePacked(users[0], users[1], users[2], users[3]),
+            abi.encodePacked(tokens[0], tokens[1], tokens[2]) // Only 3 tokens instead of 4
+        );
+
+        vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
+        (bool success,) = address(fetcher).call(input);
+    }
+
+    function testRevertIncorrectInputLength2() public {
+        bytes memory input = abi.encodePacked(
+            uint16(4), // numTokens
+            uint16(4), // numAddresses
+            abi.encodePacked(users[0], users[1], users[2]), // Only 3 users instead of 4
+            abi.encodePacked(tokens[0], tokens[1], tokens[2], tokens[3])
+        );
+
+        vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
+        (bool success,) = address(fetcher).call(input);
+    }
+
+    function testRevertEmptyInput() public {
+        bytes memory input = "";
+        vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
+        (bool success,) = address(fetcher).call(input);
+    }
+
+    function testRevertTooShortInput() public {
+        // Only sending the first 2 bytes (numTokens)
+        bytes memory input = abi.encodePacked(uint16(4));
+        vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
+        (bool success,) = address(fetcher).call(input);
+    }
 }
