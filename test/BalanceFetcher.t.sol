@@ -28,7 +28,7 @@ contract BalanceFetcherTest is Test {
         fetcher = new BalanceFetcher();
     }
 
-    function testBalanceFetching() public {
+    function testBalanceFetching_multiple_users() public {
         bytes memory input = abi.encodePacked(
             uint16(4), // numTokens
             uint16(4), // numAddresses
@@ -79,8 +79,68 @@ contract BalanceFetcherTest is Test {
                 console.log("  Balance:", balance);
 
                 // Verify balance
-                (bool success, bytes memory data) =
-                    address(token).call(abi.encodeWithSignature("balanceOf(address)", user));
+                (success, data) = address(token).call(abi.encodeWithSignature("balanceOf(address)", user));
+                require(success, "Call failed");
+                uint256 actualBalance = abi.decode(data, (uint256));
+                assertEq(balance, actualBalance, "Balance mismatch");
+            }
+            offset += 32;
+            console.log("Next user offset:", offset);
+        }
+    }
+
+    function testBalanceFetching_single_user() public {
+        bytes memory input = abi.encodePacked(
+            uint16(4), // numTokens
+            uint16(1), // numAddresses
+            abi.encodePacked(users[0]),
+            abi.encodePacked(tokens[0], tokens[1], tokens[2], tokens[3])
+        );
+
+        console.log("input");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+
+        (bool success, bytes memory data) = address(fetcher).call(input);
+        console.log("Gas used:", gas - gasleft());
+
+        require(success, "Call failed");
+
+        console.log("Response length:", data.length);
+
+        uint256 offset = 0;
+        while (offset < data.length) {
+            console.log("Current offset:", offset);
+
+            // Read user address and count
+            bytes32 userData;
+            assembly {
+                userData := mload(add(data, add(32, offset)))
+            }
+            address user = address(uint160(uint256(userData) >> 96));
+            uint96 count = uint96(uint256(userData) & 0xffffffffffffffffffffffff);
+
+            console.log("User:", user);
+            console.log("Number of non-zero balances:", count);
+
+            // Read balances
+            for (uint256 i = 0; i < count; i++) {
+                offset += 32;
+                console.log("Balance offset:", offset);
+
+                bytes32 balanceData;
+                assembly {
+                    balanceData := mload(add(data, add(32, offset)))
+                }
+                address token = address(uint160(uint256(balanceData) >> 96));
+                uint96 balance = uint96(uint256(balanceData) & 0xffffffffffffffffffffffff);
+
+                console.log("  Token:", token);
+                console.log("  Balance:", balance);
+
+                // Verify balance
+                (success, data) = address(token).call(abi.encodeWithSignature("balanceOf(address)", user));
                 require(success, "Call failed");
                 uint256 actualBalance = abi.decode(data, (uint256));
                 assertEq(balance, actualBalance, "Balance mismatch");
