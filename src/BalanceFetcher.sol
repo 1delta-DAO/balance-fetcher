@@ -3,7 +3,8 @@ pragma solidity ^0.8.30;
 
 contract BalanceFetcher {
     bytes32 private constant ERC20_BALANCE_OF = 0x70a0823100000000000000000000000000000000000000000000000000000000;
-    bytes32 private constant UINT96_MASK = 0x0000000000000000000000000000000000000000ffffffffffffffffffffffff;
+    bytes32 private constant UINT112_MASK = 0x000000000000000000000000000000000000ffffffffffffffffffffffffffff;
+    bytes32 private constant UINT16_MASK = 0x000000000000000000000000000000000000000000000000000000000000ffff;
     bytes32 private constant ERR_INVALID_INPUT_LENGTH =
         0x7db491eb00000000000000000000000000000000000000000000000000000000;
 
@@ -25,14 +26,20 @@ contract BalanceFetcher {
                 bal := mload(0x0)
             }
 
-            // encode address and balance function
-            function encodeAddressAndBalance(addr, bal) -> enc {
-                enc := or(shl(96, addr), and(bal, UINT96_MASK))
+            // encode index and balance function (2 bytes index + 14 bytes balance = 16 bytes total)
+            function encodeIndexAndBalance(idx, bal) -> enc {
+                enc := shl(128, or(shl(112, and(idx, UINT16_MASK)), and(bal, UINT112_MASK)))
             }
+
+            // encode user index and count function (2 bytes each = 4 bytes total)
+            function encodeUserIndexAndCount(userIdx, count) -> enc {
+                enc := shl(224, or(shl(16, and(userIdx, UINT16_MASK)), and(count, UINT16_MASK)))
+            }
+
             /*
             Expected input:
-            numAddresses: 2bytes
-            numTokens: 2bytes
+            numAddresses: uint16
+            numTokens: uint16
             data:
                 address1, address2, ...
                 token1, token2, ...
@@ -51,57 +58,54 @@ contract BalanceFetcher {
 
             /*
             Data structure:
-            prefix : userAddress, numberOfNoneZeroBalanceTokens (20bytes, 12bytes) : 32 bytes
-            data: tokenAddress, balance (20bytes, 12bytes) : 32 bytes per each non-zero balance
+            prefix : userIndex, numberOfNoneZeroBalanceTokens (2bytes, 2bytes) : 4 bytes 
+            data: tokenIndex, balance (2bytes, 14bytes) : 16 bytes
              */
             let ptr := mload(0x40)
             // reserve memory (max possible size - all users have none-zero balances for all tokens)
-            mstore(0x40, add(ptr, mul(32, add(numAddresses, mul(numAddresses, numTokens)))))
+            mstore(
+                0x40,
+                add(
+                    ptr,
+                    add(
+                        mul(numAddresses, 4), // 4 bytes for each user address
+                        mul(mul(numAddresses, numTokens), 16) // 16 bytes per each none-zero balance x all possible occurrences
+                    )
+                )
+            )
             let tokenAddressesOffset := add(4, mul(numAddresses, 20)) // 4 is the offset for number of addresses and numTokens
-            let totalNoneZeroCount := 0
+            let currentPtr := ptr
 
             for { let i := 0 } lt(i, numAddresses) { i := add(i, 1) } {
                 let user := shr(96, calldataload(add(4, mul(i, 20))))
-                let noneZeroCurrentUser := 0
+                let noneZeroBalances := 0
+                let userDataPtr := currentPtr
+                currentPtr := add(currentPtr, 4)
+
                 for { let j := 0 } lt(j, numTokens) { j := add(j, 1) } {
                     let token := shr(96, calldataload(add(tokenAddressesOffset, mul(j, 20))))
                     let bal := readBalance(token, user)
                     if iszero(bal) { continue }
-                    mstore(
-                        add(
-                            add(ptr, mul(add(i, 1), 32)), // offset for prefix part
-                            mul(add(totalNoneZeroCount, noneZeroCurrentUser), 32) // offset for all previous non-zero balances
-                        ),
-                        encodeAddressAndBalance(token, bal)
-                    )
-                    noneZeroCurrentUser := add(noneZeroCurrentUser, 1)
-                }
-                // update the prefix for this user
-                switch iszero(i)
-                case 0 {
-                    mstore(
-                        add(
-                            ptr,
-                            mul(add(i, totalNoneZeroCount), 32) // offset for previous prefixes and none-zero balances for all users before this user
-                        ),
-                        encodeAddressAndBalance(user, noneZeroCurrentUser)
-                    )
-                }
-                default {
-                    // the first address
-                    mstore(ptr, encodeAddressAndBalance(user, noneZeroCurrentUser))
+
+                    mstore(currentPtr, encodeIndexAndBalance(j, bal))
+                    currentPtr := add(currentPtr, 16)
+                    noneZeroBalances := add(noneZeroBalances, 1)
                 }
 
-                // update the total number of non-zero balances
-                totalNoneZeroCount := add(totalNoneZeroCount, noneZeroCurrentUser)
+                // Store the user prefix (user index and count)
+                mstore(
+                    userDataPtr,
+                    or(
+                        encodeUserIndexAndCount(i, noneZeroBalances),
+                        and(mload(userDataPtr), 0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+                    )
+                )
             }
-            // length of the data
-            mstore(0, mul(32, add(totalNoneZeroCount, numAddresses)))
-
-            mstore(0x40, add(ptr, mload(0)))
+            // Update free memory pointer
+            mstore(0x40, currentPtr)
 
             // return the data
-            return(ptr, mload(0))
+            return(ptr, sub(currentPtr, ptr))
         }
     }
 }

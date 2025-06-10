@@ -52,39 +52,48 @@ contract BalanceFetcherTest is Test {
         while (offset < data.length) {
             console.log("Current offset:", offset);
 
-            // Read user address and count
-            bytes32 userData;
+            uint16 userIndex;
+            uint16 count;
             assembly {
-                userData := mload(add(data, add(32, offset)))
+                let userData := mload(add(data, add(32, offset)))
+                userIndex := shr(240, userData) // Extract top 2 bytes
+                count := and(shr(224, userData), 0xffff) // Extract next 2 bytes
             }
-            address user = address(uint160(uint256(userData) >> 96));
-            uint96 count = uint96(uint256(userData) & 0xffffffffffffffffffffffff);
 
-            console.log("User:", user);
+            console.log("User index:", userIndex);
+            console.log("User address:", users[userIndex]);
             console.log("Number of non-zero balances:", count);
+
+            // Move to balance data
+            offset += 4;
 
             // Read balances
             for (uint256 i = 0; i < count; i++) {
-                offset += 32;
                 console.log("Balance offset:", offset);
 
-                bytes32 balanceData;
+                uint16 tokenIndex;
+                uint112 tokenBalance;
                 assembly {
-                    balanceData := mload(add(data, add(32, offset)))
+                    let balanceData := mload(add(data, add(32, offset)))
+                    tokenIndex := shr(240, balanceData) // Extract top 2 bytes
+                    tokenBalance := and(shr(128, balanceData), 0xffffffffffffffffffffffffffff) // Extract next 14 bytes
                 }
-                address token = address(uint160(uint256(balanceData) >> 96));
-                uint96 balance = uint96(uint256(balanceData) & 0xffffffffffffffffffffffff);
 
-                console.log("  Token:", token);
-                console.log("  Balance:", balance);
+                console.log("Token index:", tokenIndex);
+                console.log("Token address:", tokens[tokenIndex]);
+                console.log("Balance:", tokenBalance);
 
                 // Verify balance
-                (success, data) = address(token).call(abi.encodeWithSignature("balanceOf(address)", user));
-                require(success, "Call failed");
-                uint256 actualBalance = abi.decode(data, (uint256));
-                assertEq(balance, actualBalance, "Balance mismatch");
+                (bool balanceCallSuccess, bytes memory balanceData) =
+                    address(tokens[tokenIndex]).call(abi.encodeWithSignature("balanceOf(address)", users[userIndex]));
+                require(balanceCallSuccess, "Balance call failed");
+                uint256 actualBalance = abi.decode(balanceData, (uint256));
+                console.log("Actual balance:", actualBalance);
+                assertEq(tokenBalance, actualBalance, "Balance mismatch");
+
+                offset += 16;
             }
-            offset += 32;
+
             console.log("Next user offset:", offset);
         }
     }
@@ -113,39 +122,45 @@ contract BalanceFetcherTest is Test {
         while (offset < data.length) {
             console.log("Current offset:", offset);
 
-            // Read user address and count
-            bytes32 userData;
+            uint16 userIndex;
+            uint16 count;
             assembly {
-                userData := mload(add(data, add(32, offset)))
+                let userData := mload(add(data, add(32, offset)))
+                userIndex := shr(240, userData) // Extract top 2 bytes
+                count := and(shr(224, userData), 0xffff) // Extract next 2 bytes
             }
-            address user = address(uint160(uint256(userData) >> 96));
-            uint96 count = uint96(uint256(userData) & 0xffffffffffffffffffffffff);
 
-            console.log("User:", user);
+            console.log("User index:", userIndex);
+            console.log("User address:", users[userIndex]);
             console.log("Number of non-zero balances:", count);
+
+            offset += 4;
 
             // Read balances
             for (uint256 i = 0; i < count; i++) {
-                offset += 32;
                 console.log("Balance offset:", offset);
 
-                bytes32 balanceData;
+                uint16 tokenIndex;
+                uint112 tokenBalance;
                 assembly {
-                    balanceData := mload(add(data, add(32, offset)))
+                    let balanceData := mload(add(data, add(32, offset)))
+                    tokenIndex := shr(240, balanceData) // Extract top 2 bytes
+                    tokenBalance := and(shr(128, balanceData), 0xffffffffffffffffffffffffffff) // Extract next 14 bytes
                 }
-                address token = address(uint160(uint256(balanceData) >> 96));
-                uint96 balance = uint96(uint256(balanceData) & 0xffffffffffffffffffffffff);
 
-                console.log("  Token:", token);
-                console.log("  Balance:", balance);
+                console.log("  Token index:", tokenIndex);
+                console.log("  Token address:", tokens[tokenIndex]);
+                console.log("  Balance:", tokenBalance);
 
                 // Verify balance
-                (success, data) = address(token).call(abi.encodeWithSignature("balanceOf(address)", user));
-                require(success, "Call failed");
-                uint256 actualBalance = abi.decode(data, (uint256));
-                assertEq(balance, actualBalance, "Balance mismatch");
+                (bool balanceCallSuccess, bytes memory balanceData) =
+                    address(tokens[tokenIndex]).call(abi.encodeWithSignature("balanceOf(address)", users[userIndex]));
+                require(balanceCallSuccess, "Balance call failed");
+                uint256 actualBalance = abi.decode(balanceData, (uint256));
+                assertEq(tokenBalance, actualBalance, "Balance mismatch");
+
+                offset += 16;
             }
-            offset += 32;
             console.log("Next user offset:", offset);
         }
     }
