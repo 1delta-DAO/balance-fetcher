@@ -12,8 +12,6 @@ The contract expects a tightly packed input with the following structure:
 
 ### Example Input
 
-For 2 addresses and 2 tokens, the input would be structured as follows:
-
 ```solidity
 // Example addresses and tokens
 address[] users = [
@@ -22,41 +20,43 @@ address[] users = [
 ];
 
 address[] tokens = [
-    0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9, // USDT
-    0xaf88d065e77c8cC2239327C5EDb3A432268e5831  // USDC
+    0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9, 
+    0xaf88d065e77c8cC2239327C5EDb3A432268e5831  
 ];
 
-// Packed input would be:
-// 0x00020002 (2 tokens, 2 addresses)
-// 91ae002a960e63Ccb0E5bDE83A8C13E51e1cB91A (address1)
-// dFF70A71618739f4b8C81B11254BcE855D02496B (address2)
-// Fd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9 (token1)
-// af88d065e77c8cC2239327C5EDb3A432268e5831 (token2)
+// Create packed input
+bytes memory input = abi.encodePacked(
+    uint16(tokens.length),     // 2 bytes: number of tokens
+    uint16(users.length),      // 2 bytes: number of addresses
+    abi.encodePacked(users),   // 20 * N bytes: user addresses
+    abi.encodePacked(tokens)   // 20 * M bytes: token addresses
+);
 ```
 
 ## Output Format
 
-The contract returns a tightly packed output with the following structure:
+The contract returns a packed output:
 
 ```
-[32 bytes: user1 address + count][32 bytes: token1 + balance1][32 bytes: token2 + balance2]...
-[32 bytes: user2 address + count][32 bytes: token1 + balance1][32 bytes: token2 + balance2]...
+[4 bytes: user index + count][16 bytes: token index + balance][16 bytes: token index + balance]...
+[4 bytes: user index + count][16 bytes: token index + balance][16 bytes: token index + balance]...
 ```
 
-Each 32-byte word contains:
-- For user entries: `[20 bytes: address][12 bytes: count of non-zero balances]`
-- For balance entries: `[20 bytes: token address][12 bytes: balance]`
+Each entry uses exact byte allocation:
+- **User prefix (4 bytes)**: `[2 bytes: user index][2 bytes: count of non-zero balances]`
+- **Balance entries (16 bytes each)**: `[2 bytes: token index][14 bytes: balance (uint112)]`
 
-### Example Output
+### Data Layout
 
-```solidity
-// Example output for 2 users with non-zero balances:
-// First user (0x91ae...)
-// 0x91ae002a960e63Ccb0E5bDE83A8C13E51e1cB91A000000000000000000000002 (address + 2 balances)
-// 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9000000000000000000000001 (USDT + 1e6)
-// 0xaf88d065e77c8cC2239327C5EDb3A432268e5831000000000000000000000002 (USDC + 2e6)
+The data is laid out sequentially with no padding:
 
-// Second user (0xdFF7...)
-// 0xdFF70A71618739f4b8C81B11254BcE855D02496B000000000000000000000001 (address + 1 balance)
-// 0xaf88d065e77c8cC2239327C5EDb3A432268e5831000000000000000000000003 (USDC + 3e6)
 ```
+User 1:  [userIdx: 2b][count: 2b]
+Token 1: [tokenIdx: 2b][balance: 14b]
+Token 2: [tokenIdx: 2b][balance: 14b]
+...
+User 2:  [userIdx: 2b][count: 2b]  
+Token 1: [tokenIdx: 2b][balance: 14b]
+...
+```
+
