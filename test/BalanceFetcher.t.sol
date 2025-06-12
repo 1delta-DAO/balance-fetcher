@@ -48,7 +48,7 @@ contract BalanceFetcherTest is Test {
 
         console.log("Response length:", data.length);
 
-        uint256 offset = 0;
+        uint256 offset = 8; //skip block number
         while (offset < data.length) {
             console.log("Current offset:", offset);
 
@@ -118,7 +118,7 @@ contract BalanceFetcherTest is Test {
 
         console.log("Response length:", data.length);
 
-        uint256 offset = 0;
+        uint256 offset = 8; // skip block number
         while (offset < data.length) {
             console.log("Current offset:", offset);
 
@@ -163,6 +163,88 @@ contract BalanceFetcherTest is Test {
             }
             console.log("Next user offset:", offset);
         }
+    }
+
+    function testNativeBalanceFetching() public {
+        uint256 ethAmount = 5 ether;
+        vm.deal(users[0], ethAmount);
+
+        bytes memory input = abi.encodePacked(
+            uint16(1),
+            uint16(1),
+            abi.encodePacked(users[0]),
+            abi.encodePacked(address(0)) // native
+        );
+
+        console.log("Expected ETH balance:", ethAmount);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(input);
+        console.log("Gas used:", gas - gasleft());
+
+        require(success, "Call failed");
+
+        console.log("Response length:", data.length);
+
+        uint256 offset = 8; // skip block number
+
+        // Should have at least one user entry
+        require(offset < data.length, "No data returned");
+
+        // Read user prefix (4 bytes)
+        uint16 userIndex;
+        uint16 count;
+        assembly {
+            let userData := mload(add(data, add(32, offset)))
+            userIndex := shr(240, userData) // Extract top 2 bytes
+            count := and(shr(224, userData), 0xffff) // Extract next 2 bytes
+        }
+
+        console.log("User index:", userIndex);
+        assertEq(userIndex, 0, "User index should be 0");
+        console.log("Number of non-zero balances:", count);
+        assertEq(count, 1, "Should have 1 non-zero balance (native ETH)");
+
+        offset += 4;
+
+        // Read the native balance (16 bytes)
+        uint16 tokenIndex;
+        uint112 tokenBalance;
+        assembly {
+            let balanceData := mload(add(data, add(32, offset)))
+            tokenIndex := shr(240, balanceData) // Extract top 2 bytes
+            tokenBalance := and(shr(128, balanceData), 0xffffffffffffffffffffffffffff) // Extract next 14 bytes
+        }
+
+        console.log("Token index:", tokenIndex);
+        assertEq(tokenIndex, 0, "Token index should be 0 (native ETH)");
+        console.log("Returned ETH balance:", tokenBalance);
+
+        // The contract should return the contract's ETH balance (which should be ethAmount after the call)
+        assertEq(tokenBalance, ethAmount, "Native balance mismatch");
+    }
+
+    function testBlockNumberReturned() public {
+        bytes memory input = abi.encodePacked(
+            uint16(1), // numTokens
+            uint16(1), // numAddresses
+            abi.encodePacked(users[0]),
+            abi.encodePacked(tokens[0])
+        );
+
+        (bool success, bytes memory data) = address(fetcher).call(input);
+        require(success, "Call failed");
+
+        // Extract block number from the first 8 bytes of response
+        uint256 returnedBlockNumber;
+        assembly {
+            returnedBlockNumber := mload(add(data, 32))
+            returnedBlockNumber := shr(192, returnedBlockNumber) // Extract first 8 bytes (64 bits)
+        }
+
+        console.log("Returned block number:", returnedBlockNumber);
+        assertEq(returnedBlockNumber, block.number, "Block number should match current block");
+        console.log("Block number test passed");
     }
 
     function testRevertZeroTokens() public {

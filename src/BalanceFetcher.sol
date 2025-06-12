@@ -66,15 +66,19 @@ contract BalanceFetcher {
             mstore(
                 0x40,
                 add(
-                    ptr,
+                    0x08, // reserve for block number
                     add(
-                        mul(numAddresses, 4), // 4 bytes for each user address
-                        mul(mul(numAddresses, numTokens), 16) // 16 bytes per each none-zero balance x all possible occurrences
+                        ptr,
+                        add(
+                            mul(numAddresses, 4), // 4 bytes for each user address
+                            mul(mul(numAddresses, numTokens), 16) // 16 bytes per each none-zero balance x all possible occurrences
+                        )
                     )
                 )
             )
+            mstore(ptr, shl(192, number()))
             let tokenAddressesOffset := add(4, mul(numAddresses, 20)) // 4 is the offset for number of addresses and numTokens
-            let currentPtr := ptr
+            let currentPtr := add(ptr, 0x08)
 
             for { let i := 0 } lt(i, numAddresses) { i := add(i, 1) } {
                 let user := shr(96, calldataload(add(4, mul(i, 20))))
@@ -84,7 +88,12 @@ contract BalanceFetcher {
 
                 for { let j := 0 } lt(j, numTokens) { j := add(j, 1) } {
                     let token := shr(96, calldataload(add(tokenAddressesOffset, mul(j, 20))))
-                    let bal := readBalance(token, user)
+                    let bal := 0
+                    switch iszero(token)
+                    // ERC20 balance
+                    case 0 { bal := readBalance(token, user) }
+                    // native balance
+                    default { bal := balance(user) }
                     if iszero(bal) { continue }
 
                     mstore(currentPtr, encodeIndexAndBalance(j, bal))
