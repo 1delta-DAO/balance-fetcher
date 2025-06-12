@@ -1,6 +1,6 @@
 # Balance Fetcher
 
-A solidity contract for fetching ERC20 token balances for multiple addresses in a single transaction.
+A solidity contract for fetching ERC20 token balances and native ETH balances for multiple addresses in a single transaction.
 
 ## Input Format
 
@@ -20,8 +20,9 @@ address[] users = [
 ];
 
 address[] tokens = [
-    0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9, 
-    0xaf88d065e77c8cC2239327C5EDb3A432268e5831  
+    0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9, // USDT
+    0xaf88d065e77c8cC2239327C5EDb3A432268e5831, // USDC
+    address(0)  // Native ETH (use address(0) for native balance)
 ];
 
 // Create packed input
@@ -35,28 +36,32 @@ bytes memory input = abi.encodePacked(
 
 ## Output Format
 
-The contract returns a packed output:
+The contract returns a packed output with block number:
 
 ```
-[4 bytes: user index + count][16 bytes: token index + balance][16 bytes: token index + balance]...
+[8 bytes: block number][4 bytes: user index + count][16 bytes: token index + balance][16 bytes: token index + balance]...
 [4 bytes: user index + count][16 bytes: token index + balance][16 bytes: token index + balance]...
 ```
 
 Each entry uses exact byte allocation:
+
+- **Block number (8 bytes)**: Current block number when the call was executed
 - **User prefix (4 bytes)**: `[2 bytes: user index][2 bytes: count of non-zero balances]`
 - **Balance entries (16 bytes each)**: `[2 bytes: token index][14 bytes: balance (uint112)]`
+
+**Note**: Use `address(0)` in the token list to query native ETH balances.
 
 ### Data Layout
 
 The data is laid out sequentially with no padding:
 
 ```
+Block Number: [8 bytes: current block number]
 User 1:  [userIdx: 2b][count: 2b]
-Token 1: [tokenIdx: 2b][balance: 14b]
+Token 1: [tokenIdx: 2b][balance: 14b]  // ERC20 or native ETH balance
 Token 2: [tokenIdx: 2b][balance: 14b]
 ...
-User 2:  [userIdx: 2b][count: 2b]  
+User 2:  [userIdx: 2b][count: 2b]
 Token 1: [tokenIdx: 2b][balance: 14b]
 ...
 ```
-
