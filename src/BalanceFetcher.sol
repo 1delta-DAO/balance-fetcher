@@ -57,7 +57,7 @@ contract BalanceFetcher {
 
             /*
             Data structure:
-            prefix : userIndex, numberOfNoneZeroBalanceTokens (2bytes, 2bytes) : 4 bytes 
+            prefix : userIndex, numberOfNoneZeroBalanceTokens (2bytes, 2bytes) : 4 bytes
             data: tokenIndex, balance (2bytes, 14bytes) : 16 bytes
              */
             let ptr := mload(0x40)
@@ -80,13 +80,13 @@ contract BalanceFetcher {
             let currentPtr := add(ptr, 0x08)
 
             for { let i := 0 } lt(i, numAddresses) { i := add(i, 1) } {
-                let user := shr(96, add(0x44, calldataload(add(4, mul(i, 20)))))
+                let user := shr(96, calldataload(add(0x44, add(4, mul(i, 20)))))
                 let noneZeroBalances := 0
                 let userDataPtr := currentPtr
                 currentPtr := add(currentPtr, 4)
 
                 for { let j := 0 } lt(j, numTokens) { j := add(j, 1) } {
-                    let token := shr(96, add(0x44, calldataload(add(tokenAddressesOffset, mul(j, 20)))))
+                    let token := shr(96, calldataload(add(0x44, add(tokenAddressesOffset, mul(j, 20)))))
                     let bal := 0
                     switch iszero(token)
                     // ERC20 balance
@@ -115,5 +115,10 @@ contract BalanceFetcher {
             // return the data
             return(ptr, sub(currentPtr, ptr))
         }
+        // assembly {
+        //     let ptr := mload(0x40)
+        //     calldatacopy(ptr, 0x44, calldatasize())
+        //     return(ptr, calldataload(0x24))
+        // }
     }
 }
