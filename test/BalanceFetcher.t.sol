@@ -5,8 +5,12 @@ import "forge-std/Test.sol";
 import "../src/BalanceFetcher.sol";
 import "forge-std/console.sol";
 
+interface IBal {
+    function bal(bytes calldata data) external view returns (bytes memory);
+}
+
 contract BalanceFetcherTest is Test {
-    BalanceFetcher public fetcher;
+    IBal public fetcher;
 
     // Test addresses
     address[] public users = [
@@ -24,8 +28,8 @@ contract BalanceFetcherTest is Test {
     ];
 
     function setUp() public {
-        vm.createSelectFork("https://1rpc.io/arb");
-        fetcher = new BalanceFetcher();
+        vm.createSelectFork("https://arbitrum.drpc.org");
+        fetcher = IBal(address(new BalanceFetcher()));
     }
 
     function testBalanceFetching_multiple_users() public {
@@ -41,11 +45,9 @@ contract BalanceFetcherTest is Test {
 
         uint256 gas = gasleft();
 
-        (bool success, bytes memory data) = address(fetcher).call(input);
+        bytes memory data = fetcher.bal(input);
+
         console.log("Gas used:", gas - gasleft());
-
-        require(success, "Call failed");
-
         console.log("Response length:", data.length);
 
         uint256 offset = 8; //skip block number
@@ -111,11 +113,9 @@ contract BalanceFetcherTest is Test {
 
         uint256 gas = gasleft();
 
-        (bool success, bytes memory data) = address(fetcher).call(input);
+        bytes memory data = fetcher.bal(input);
+
         console.log("Gas used:", gas - gasleft());
-
-        require(success, "Call failed");
-
         console.log("Response length:", data.length);
 
         uint256 offset = 8; // skip block number
@@ -179,11 +179,9 @@ contract BalanceFetcherTest is Test {
         console.log("Expected ETH balance:", ethAmount);
 
         uint256 gas = gasleft();
-        (bool success, bytes memory data) = address(fetcher).call(input);
+        bytes memory data = fetcher.bal(input);
+
         console.log("Gas used:", gas - gasleft());
-
-        require(success, "Call failed");
-
         console.log("Response length:", data.length);
 
         uint256 offset = 8; // skip block number
@@ -232,8 +230,7 @@ contract BalanceFetcherTest is Test {
             abi.encodePacked(tokens[0])
         );
 
-        (bool success, bytes memory data) = address(fetcher).call(input);
-        require(success, "Call failed");
+        bytes memory data = fetcher.bal(input);
 
         // Extract block number from the first 8 bytes of response
         uint256 returnedBlockNumber;
@@ -256,7 +253,7 @@ contract BalanceFetcherTest is Test {
         );
 
         vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
-        (bool success,) = address(fetcher).call(input);
+        fetcher.bal(input);
     }
 
     function testRevertZeroAddresses() public {
@@ -268,7 +265,7 @@ contract BalanceFetcherTest is Test {
         );
 
         vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
-        (bool success,) = address(fetcher).call(input);
+        fetcher.bal(input);
     }
 
     function testRevertIncorrectInputLength() public {
@@ -281,7 +278,7 @@ contract BalanceFetcherTest is Test {
         );
 
         vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
-        (bool success,) = address(fetcher).call(input);
+        fetcher.bal(input);
     }
 
     function testRevertIncorrectInputLength2() public {
@@ -293,19 +290,19 @@ contract BalanceFetcherTest is Test {
         );
 
         vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
-        (bool success,) = address(fetcher).call(input);
+        fetcher.bal(input);
     }
 
     function testRevertEmptyInput() public {
         bytes memory input = "";
         vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
-        (bool success,) = address(fetcher).call(input);
+        fetcher.bal(input);
     }
 
     function testRevertTooShortInput() public {
         // Only sending the first 2 bytes (numTokens)
         bytes memory input = abi.encodePacked(uint16(4));
         vm.expectRevert(BalanceFetcher.InvalidInputLength.selector);
-        (bool success,) = address(fetcher).call(input);
+        fetcher.bal(input);
     }
 }
