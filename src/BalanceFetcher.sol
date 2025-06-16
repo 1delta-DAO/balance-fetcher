@@ -44,17 +44,16 @@ contract BalanceFetcher {
                 address1, address2, ...
                 token1, token2, ...
             */
-            let firstWrd := calldataload(0)
+            let firstWrd := calldataload(0x44)
+            let inputLength := calldataload(0x24)
             let numTokens := shr(240, firstWrd)
             let numAddresses := and(0x0000ffff, shr(224, firstWrd))
 
             // revert if number of tokens or addresses is zero
             if or(iszero(numTokens), iszero(numAddresses)) { revertInvalidInputLength() }
 
-            // revert if the address length is incorrect
-            if xor(calldatasize(), add(4, add(mul(numTokens, 20), mul(numAddresses, 20)))) {
-                revertInvalidInputLength()
-            }
+            // revert if input lenfth is incorrect
+            if xor(inputLength, add(4, add(mul(numTokens, 20), mul(numAddresses, 20)))) { revertInvalidInputLength() }
 
             /*
             Data structure:
@@ -81,13 +80,13 @@ contract BalanceFetcher {
             let currentPtr := add(ptr, 0x08)
 
             for { let i := 0 } lt(i, numAddresses) { i := add(i, 1) } {
-                let user := shr(96, calldataload(add(4, mul(i, 20))))
+                let user := shr(96, add(0x44, calldataload(add(4, mul(i, 20)))))
                 let noneZeroBalances := 0
                 let userDataPtr := currentPtr
                 currentPtr := add(currentPtr, 4)
 
                 for { let j := 0 } lt(j, numTokens) { j := add(j, 1) } {
-                    let token := shr(96, calldataload(add(tokenAddressesOffset, mul(j, 20))))
+                    let token := shr(96, add(0x44, calldataload(add(tokenAddressesOffset, mul(j, 20)))))
                     let bal := 0
                     switch iszero(token)
                     // ERC20 balance
