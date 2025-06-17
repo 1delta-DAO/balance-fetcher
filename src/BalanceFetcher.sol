@@ -18,12 +18,13 @@ contract BalanceFetcher {
                 revert(0, 4)
             }
 
-            // read balance function
+            // store the selector once
+            mstore(0x0, ERC20_BALANCE_OF)
+            // read balance function with the in-place selector
             function readBalance(token, user) -> bal {
-                mstore(0x0, ERC20_BALANCE_OF)
                 mstore(0x4, user)
-                pop(staticcall(gas(), token, 0x0, 0x24, 0x0, 0x20))
-                bal := mload(0x0)
+                pop(staticcall(gas(), token, 0x0, 0x24, 0x4, 0x20))
+                bal := mload(0x4)
             }
 
             // encode index and balance function (2 bytes index + 14 bytes balance = 16 bytes total)
