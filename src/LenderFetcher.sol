@@ -36,14 +36,14 @@ contract LenderFetcher {
                 // get balance and set result
                 mstore(0x00, AAVE_GET_ACCOUNT_DATA)
                 mstore(0x04, user)
-                if iszero(staticcall(gas(), pool, 0, 0x24, 0x00, 0x40)) {
+                if iszero(staticcall(gas(), pool, 0, 0x24, 0x100, 0xc0)) {
                     mstore(0x00, ERR_CALL_FAILED)
                     revert(0x00, 0x04)
                 }
-                let col := and(UINT120_MAX, mload(0x00))
-                let deb := and(UINT120_MAX, mload(0x20))
+                let col := and(UINT120_MAX, mload(0x100))
+                let deb := and(UINT120_MAX, mload(0x120))
                 if and(iszero(col), iszero(deb)) { result := 0 }
-                // lenderId (1byte) | forkId (1byte) |totalCollateralBase (16bytes) | totalDebtBase (16bytes)
+                // lenderId (1byte) | forkId (1byte) |totalCollateralBase (15bytes) | totalDebtBase (15bytes)
                 result := or(shl(248, and(lender, 0xff)), shl(240, and(fork, 0xff)))
                 result := or(result, or(shl(120, col), deb))
             }
@@ -60,8 +60,8 @@ contract LenderFetcher {
             let offset := 0x44
             let resultsPtr := mload(0x40)
             // save block number uint64
-            mstore(resultsPtr, and(number(), 0xffffffffffffffff))
-            let memOffset := add(resultsPtr, 0x08)
+            mstore(resultsPtr, shl(192, and(number(), 0xffffffffffffffff)))
+            let memOffset := add(resultsPtr, 8)
             // reserve 0xff bytes
             mstore(0x40, add(resultsPtr, 0xff))
 
