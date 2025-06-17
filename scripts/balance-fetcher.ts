@@ -1,20 +1,18 @@
 import {
   createPublicClient,
   createWalletClient,
-  createTestClient,
   http,
-  parseEther,
   encodePacked,
   hexToBytes,
-  bytesToHex,
-  getContract,
-  getAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum } from 'viem/chains'
-import { spawn } from 'child_process'
+import { spawn, exec } from 'child_process'
 import { readFileSync } from 'fs'
 import { join } from 'path'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
 
 const USERS = [
   '0x91ae002a960e63Ccb0E5bDE83A8C13E51e1cB91A',
@@ -40,8 +38,46 @@ const CHAIN_ID = '42161'
 class AnvilManager {
   private anvilProcess: any = null
 
+  private async kpop(port: number): Promise<void> {
+    try {
+      const isWindows = process.platform === 'win32'
+      let command: string
+      
+      if (isWindows) {
+        command = `netstat -ano | findstr :${port}`
+      } else {
+        command = `lsof -ti:${port}`
+      }
+      
+      const { stdout } = await execAsync(command).catch(() => ({ stdout: '' }))
+      
+      if (stdout.trim()) {
+        console.log(`Found processes on port ${port}`)
+        
+        if (isWindows) {
+          const lines = stdout.trim().split('\n')
+          for (const line of lines) {
+            const parts = line.trim().split(/\s+/)
+            const pid = parts[parts.length - 1]
+            if (pid && !isNaN(Number(pid))) {
+              await execAsync(`taskkill /F /PID ${pid}`).catch(() => {})
+            }
+          }
+        } else {
+          await execAsync(`kill -9 ${stdout.trim().split('\n').join(' ')}`).catch(() => {})
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    } catch (error) {
+      console.log('No processes found on port or failed to kill:', error instanceof Error ? error.message : String(error))
+    }
+  }
+
   async start(): Promise<void> {
     console.log('Starting Anvil...')
+    // kill process on port
+    await this.kpop(ANVIL_PORT)
     
     return new Promise((resolve, reject) => {
       this.anvilProcess = spawn('anvil', [
@@ -76,11 +112,40 @@ class AnvilManager {
     })
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.anvilProcess) {
       console.log('Stopping Anvil...')
-      this.anvilProcess.kill()
-      this.anvilProcess = null
+      
+      return new Promise<void>((resolve) => {
+        const cleanup = () => {
+          this.anvilProcess = null
+          resolve()
+        }
+        
+        const forceKillTimeout = setTimeout(() => {
+          console.log('Force kill anviil...')
+          try {
+            this.anvilProcess.kill('SIGKILL')
+          } catch (error) {
+             console.log('Error force killing process:', error instanceof Error ? error.message : String(error))
+           }
+          cleanup()
+        }, 1000)
+        
+        this.anvilProcess.on('exit', () => {
+          clearTimeout(forceKillTimeout)
+          console.log('Anvil process exited')
+          cleanup()
+        })
+        
+        try {
+          this.anvilProcess.kill('SIGTERM')
+        } catch (error) {
+           console.log('Error sending SIGTERM:', error instanceof Error ? error.message : String(error))
+           clearTimeout(forceKillTimeout)
+           cleanup()
+         }
+      })
     }
   }
 }
@@ -251,7 +316,7 @@ async function main() {
     console.error('Error:', error)
     process.exit(1)
   } finally {
-    anvil.stop()
+    await anvil.stop()
   }
 }
 
@@ -265,4 +330,4 @@ process.on('SIGTERM', () => {
   process.exit(0)
 })
 
-main().catch(console.error) 
+main().catch(console.error)
