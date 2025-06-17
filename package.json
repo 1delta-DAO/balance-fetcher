@@ -2,7 +2,8 @@
   "name": "balance-fetcher",
   "version": "1.0.0",
   "scripts": {
-    "balance-fetcher": "tsx scripts/balance-fetcher.ts"
+    "balance-fetcher": "tsx scripts/balance-fetcher.ts",
+    "balance-fetcher-sim": "tsx scripts/balance-fetcher-simulate.ts"
   },
   "dependencies": {
     "viem": "^2.31.3"
