@@ -68,7 +68,7 @@ contract LenderFetcher {
             let firstWord := calldataload(offset)
             let inputLength := shr(240, firstWord) // I cannot use the mload(0x24) because of zero padding
             let user := shr(96, shl(16, firstWord))
-            offset := add(offset, 21) // skip user address and input length
+            offset := add(offset, 22) // skip user address and input length
 
             for {} lt(offset, add(inputLength, 0x44)) {} {
                 // the first byte us the lenderId, this id is used to determine which function to use
