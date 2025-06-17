@@ -66,9 +66,9 @@ contract BalanceFetcher {
             mstore(
                 0x40,
                 add(
-                    0x08, // reserve for block number
+                    ptr,
                     add(
-                        ptr,
+                        0x48, // reserve for block number, length and offset
                         add(
                             mul(numAddresses, 4), // 4 bytes for each user address
                             mul(mul(numAddresses, numTokens), 16) // 16 bytes per each none-zero balance x all possible occurrences
@@ -76,9 +76,11 @@ contract BalanceFetcher {
                     )
                 )
             )
-            mstore(ptr, shl(192, number()))
+            mstore(ptr, 0x20)
+            mstore(add(ptr, 0x40), shl(192, number()))
+            let currentPtr := add(ptr, 0x48) // skip bytes length, offset and block number
+
             let tokenAddressesOffset := add(4, mul(numAddresses, 20)) // 4 is the offset for number of addresses and numTokens
-            let currentPtr := add(ptr, 0x08)
 
             for { let i := 0 } lt(i, numAddresses) { i := add(i, 1) } {
                 let user := shr(96, calldataload(add(0x44, add(4, mul(i, 20)))))
@@ -110,16 +112,12 @@ contract BalanceFetcher {
                     )
                 )
             }
-            // Update free memory pointer
-            mstore(0x40, currentPtr)
+            // Update free memory pointer (align to 32 bytes)
+            mstore(0x40, and(add(currentPtr, 0x1f), not(0x1f)))
 
             // return the data
+            mstore(add(ptr, 0x20), sub(sub(currentPtr, ptr), 0x40)) // data length and offset
             return(ptr, sub(currentPtr, ptr))
         }
-        // assembly {
-        //     let ptr := mload(0x40)
-        //     calldatacopy(ptr, 0x44, calldatasize())
-        //     return(ptr, calldataload(0x24))
-        // }
     }
 }
