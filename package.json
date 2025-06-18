@@ -4,7 +4,9 @@
   "scripts": {
     "balance-fetcher": "tsx scripts/balance-fetcher.ts",
     "balance-fetcher-sim": "tsx scripts/balance-fetcher-simulate.ts",
-    "balance-fetcher-multi": "tsx scripts/balance-fetcher-multicall.ts"
+    "balance-fetcher-multi": "tsx scripts/balance-fetcher-multicall.ts",
+    "balance-fetcher-perf": "tsx scripts/balance-fetcher-performance.ts",
+    "balance-fetcher-simo": "tsx scripts/balance-fetcher-sim-onchain.ts"
   },
   "dependencies": {
     "viem": "^2.31.3"
