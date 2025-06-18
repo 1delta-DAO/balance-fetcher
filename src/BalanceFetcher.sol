@@ -7,11 +7,18 @@ contract BalanceFetcher {
     bytes32 private constant UINT16_MASK = 0x000000000000000000000000000000000000000000000000000000000000ffff;
     bytes32 private constant ERR_INVALID_INPUT_LENGTH =
         0x7db491eb00000000000000000000000000000000000000000000000000000000;
+    bytes32 private constant ERR_NO_VALUE = 0xf2365b5b00000000000000000000000000000000000000000000000000000000;
 
     error InvalidInputLength();
+    error NoValue();
 
     fallback() external payable {
         assembly {
+            // revert if value is sent
+            if callvalue() {
+                mstore(0, ERR_NO_VALUE)
+                revert(0, 4)
+            }
             // revert function
             function revertInvalidInputLength() {
                 mstore(0, ERR_INVALID_INPUT_LENGTH) // InvalidInputLength
