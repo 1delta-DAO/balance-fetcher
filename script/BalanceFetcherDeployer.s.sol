@@ -15,7 +15,8 @@ import {StdStyle} from "forge-std/StdStyle.sol";
  *
  * 2. Deploy:
  *    forge script script/BalanceFetcherDeployer.s.sol --rpc-url $RPC_URL --account deployer --broadcast --verify
- * @Note: etherscan (or others) api key should be added to the toml file or passed as an argument to forge script
+ *
+ *  Etherscan (or others) api key should be added to the toml file or passed as an argument to forge script
  */
 contract BalanceFetcherDeployer is Script {
     address internal constant FACTORY = 0x16c4Dc0f662E2bEceC91fC5E7aeeC6a25684698A;

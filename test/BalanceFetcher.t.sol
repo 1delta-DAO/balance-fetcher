@@ -28,7 +28,7 @@ contract BalanceFetcherTest is Test {
     ];
 
     function setUp() public {
-        vm.createSelectFork("https://arbitrum.drpc.org");
+        vm.createSelectFork("wss://arbitrum-one-rpc.publicnode.com");
         fetcher = IBal(address(new BalanceFetcher()));
     }
 
@@ -98,6 +98,11 @@ contract BalanceFetcherTest is Test {
 
             console.log("Next user offset:", offset);
         }
+    }
+
+    function test_revertOnValue() public {
+        vm.expectRevert(BalanceFetcher.NoValue.selector);
+        (bool s, bytes memory data) = address(fetcher).call(abi.encodeWithSelector(fetcher.bal.selector, new bytes(0)));
     }
 
     function testBalanceFetching_single_user() public {
