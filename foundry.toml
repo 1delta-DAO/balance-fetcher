@@ -3,16 +3,11 @@ solc-version = "0.8.30"
 src = "src"
 out = "out"
 libs = ["lib"]
+evm_version = 'paris'
 
-# Deployment configurations
-[profile.deployment]
-auto_detect_solc = false
-
-# Network configurations for deployment
 [profile.networks]
 base.url = "wss://base-rpc.publicnode.com"
 mainnet.chain_id = 8453
 
-# Etherscan verification
 [etherscan]
 base = { key = "${BAK}" }
