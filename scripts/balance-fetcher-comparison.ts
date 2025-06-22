@@ -307,7 +307,16 @@ async function runFullComparison() {
       break;
     }
 
-    const result = await runComparisonTest(tokenCount, tokens, TEST_USERS);
+    const expandedTokens: Address[] = [];
+    for (let i = 0; i < tokenCount; i++) {
+      expandedTokens.push(tokens[i % tokens.length]);
+    }
+
+    const result = await runComparisonTest(
+      tokenCount,
+      expandedTokens,
+      TEST_USERS
+    );
     results.push(result);
 
     // Check if both approaches failed
