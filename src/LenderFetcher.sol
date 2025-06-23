@@ -80,7 +80,7 @@ contract LenderFetcher {
                 if gt(returndatasize(), 0) { returndatacopy(add(ptr, 0x20), 0, returndatasize()) }
 
                 let marketsLength := mload(add(ptr, 0x40))
-                let marketsData := 0x60
+                let marketsData := add(ptr, 0x60)
 
                 let hasCollateral := 0
                 let hasDebt := 0
