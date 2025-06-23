@@ -34,7 +34,7 @@ contract LenderFetcher {
 
             /* *************
              * Functions
-             ************* */
+             *************** */
             function getAaveBalance(currentOffset, user, lender) -> result, offset {
                 let oneword := calldataload(currentOffset)
                 let fork := shr(248, oneword)
@@ -58,7 +58,7 @@ contract LenderFetcher {
 
             /* *************
              * Logic
-             ************* */
+             *************** */
             if lt(calldatasize(), 0x44) {
                 mstore(0x00, ERR_INVALID_INPUT_LENGTH)
                 revert(0x00, 0x04)
@@ -78,8 +78,14 @@ contract LenderFetcher {
 
             output:
             - 16 bytes: block number
-            - 32 bytes: result
-            - 32 bytes: result
+            - 32 bytes: result0
+            - 32 bytes: result1
+            - ...
+
+            result encoding:
+            - 1 byte: forkId
+            - 15 bytes: totalCollateralBase
+            - 15 bytes: totalDebtBase
             */
 
             let firstWord := calldataload(offset)
@@ -103,7 +109,7 @@ contract LenderFetcher {
                 )
             )
             mstore(resultsPtr, 0x20) // offset
-            mstore(add(resultsPtr, 0x40), shl(192, and(number(), 0xffffffffffffffff))) // block number
+            mstore(add(resultsPtr, 0x40), shl(192, number())) // block number
             let currentPtr := add(resultsPtr, 0x48) // skip bytes length, offset and block number
 
             let user := shr(96, shl(16, firstWord))
