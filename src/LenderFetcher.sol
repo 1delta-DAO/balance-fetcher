@@ -17,13 +17,21 @@ contract LenderFetcher {
         0x7db491eb00000000000000000000000000000000000000000000000000000000;
     bytes32 private constant ERR_UNSUPPORTED_LENDER = 0x8c379a0000000000000000000000000000000000000000000000000000000000;
     bytes32 private constant AAVE_GET_ACCOUNT_DATA = 0xbf92857c00000000000000000000000000000000000000000000000000000000;
+    bytes32 private constant ERR_NO_VALUE = 0xf2365b5b00000000000000000000000000000000000000000000000000000000;
 
     error InvalidInputLength();
     error UnsupportedLender();
     error CallFailed();
+    error NoValue();
 
     fallback() external payable {
         assembly {
+            // revert if value is sent
+            if callvalue() {
+                mstore(0, ERR_NO_VALUE)
+                revert(0, 4)
+            }
+
             /* *************
              * Functions
              ************* */
@@ -43,7 +51,7 @@ contract LenderFetcher {
                 let col := and(UINT120_MAX, mload(0x100))
                 let deb := and(UINT120_MAX, mload(0x120))
                 if and(iszero(col), iszero(deb)) { result := 0 }
-                // lenderId (1byte) | forkId (1byte) |totalCollateralBase (15bytes) | totalDebtBase (15bytes)
+                // lenderId (1byte) | forkId (1byte) | totalCollateralBase (15bytes) | totalDebtBase (15bytes)
                 result := or(shl(248, and(lender, 0xff)), shl(240, and(fork, 0xff)))
                 result := or(result, or(shl(120, col), deb))
             }
@@ -59,20 +67,51 @@ contract LenderFetcher {
             // skip function selector, abi encoding of bytes
             let offset := 0x44
             let resultsPtr := mload(0x40)
-            // save block number uint64
-            mstore(resultsPtr, shl(192, and(number(), 0xffffffffffffffff)))
-            let memOffset := add(resultsPtr, 8)
-            // reserve 0xff bytes
-            mstore(0x40, add(resultsPtr, 0xff))
+
+            /*
+            input:
+            - 16 bytes: input length
+            - 20 bytes: user address
+            - 1 byte: lenderId
+            - 1 byte: forkId
+            - 20 bytes: pool address
+
+            output:
+            - 16 bytes: block number
+            - 32 bytes: result
+            - 32 bytes: result
+            */
 
             let firstWord := calldataload(offset)
-            let inputLength := shr(240, firstWord) // I cannot use the mload(0x24) because of zero padding
+            // the first 16 bytes is the input length (can't use mload(0x24) here because of possible zero padding for alignment)
+            let inputLength := shr(240, firstWord)
+            // reserve 0xff bytes
+            mstore(
+                0x40,
+                add(
+                    0x50, // offset, length (abi encoding) and block number
+                    add(
+                        resultsPtr,
+                        mul(
+                            div(
+                                sub(inputLength, 36), // subtract the user address and input length
+                                22 // divide by 22 which is the required data length for each fork
+                            ),
+                            32 // each result length
+                        )
+                    )
+                )
+            )
+            mstore(resultsPtr, 0x20) // offset
+            mstore(add(resultsPtr, 0x40), shl(192, and(number(), 0xffffffffffffffff))) // block number
+            let currentPtr := add(resultsPtr, 0x48) // skip bytes length, offset and block number
+
             let user := shr(96, shl(16, firstWord))
             offset := add(offset, 22) // skip user address and input length
 
             for {} lt(offset, add(inputLength, 0x44)) {} {
-                // the first byte us the lenderId, this id is used to determine which function to use
-                let lender := byte(0, calldataload(offset))
+                // the first byte is the lenderId, this id is used to determine which function to use
+                let lender := byte(0, calldataload(offset)) // 3 gas
                 offset := add(offset, 1)
 
                 let result := 0
@@ -93,12 +132,16 @@ contract LenderFetcher {
 
                 if iszero(result) { continue } // save only none-zero results
 
-                mstore(memOffset, result)
-                memOffset := add(memOffset, 0x20) // skip result
+                mstore(currentPtr, result)
+                currentPtr := add(currentPtr, 0x20) // skip result
             }
 
-            mstore(0x40, add(memOffset, 0x20)) // set the fmp to a word after the results
-            return(resultsPtr, sub(memOffset, resultsPtr))
+            // Update free memory pointer (align to 32 bytes)
+            mstore(0x40, and(add(currentPtr, 0x1f), not(0x1f)))
+
+            // return the data
+            mstore(add(resultsPtr, 0x20), sub(sub(currentPtr, resultsPtr), 0x40)) // data length and offset
+            return(resultsPtr, sub(currentPtr, resultsPtr))
         }
     }
 }
