@@ -61,6 +61,29 @@ interface ICEther {
     function exchangeRateStored() external view returns (uint256);
 }
 
+// Compound V3 Interfaces
+interface IComet {
+    function supply(address asset, uint256 amount) external;
+    function withdraw(address asset, uint256 amount) external;
+    function balanceOf(address account) external view returns (uint256);
+    function borrowBalanceOf(address account) external view returns (uint256);
+    function collateralBalanceOf(address account, address asset) external view returns (uint128);
+    function baseToken() external view returns (address);
+    function numAssets() external view returns (uint8);
+    function getAssetInfo(uint8 i) external view returns (AssetInfo memory);
+}
+
+struct AssetInfo {
+    uint8 offset;
+    address asset;
+    address priceFeed;
+    uint64 scale;
+    uint64 borrowCollateralFactor;
+    uint64 liquidateCollateralFactor;
+    uint64 liquidationFactor;
+    uint128 supplyCap;
+}
+
 contract LenderFetcherTest is Test {
     LenderFetcher public fetcher;
 
@@ -80,6 +103,7 @@ contract LenderFetcherTest is Test {
     address public constant ETH_USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
     address public constant ETH_DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
     address public constant ETH_WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address public constant ETH_WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
 
     // Compound V2 contracts
     address public constant COMPOUND_COMPTROLLER = 0x3d9819210A31b4961b30EF54bE2aeD79B9c9Cd3B;
@@ -88,13 +112,19 @@ contract LenderFetcherTest is Test {
     address public constant CDAI = 0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643;
     address public constant CETH = 0x4Ddc2D193948926D02f9B1fE9e1daa0718270ED5;
 
+    // Compound V3 Eth mainnet
+    address public constant COMET_USDC = 0xc3d688B66703497DAA19211EEdff47f25384cdc3;
+    address public constant COMET_WETH = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
+
     // Fork IDs
     uint8 public constant AAVE_V2_FORK = 0;
     uint8 public constant AAVE_V3_FORK = 0;
     uint8 public constant AVALON_FORK = 1;
     uint8 public constant COMP_V2_FORK = 0;
+    uint8 public constant COMP_V3_FORK = 0;
 
     uint8 public constant COMP_V2_LENDER = 2;
+    uint8 public constant COMP_V3_LENDER = 3;
 
     uint256 internal arbForkId;
     uint256 internal ethForkId;
@@ -147,10 +177,11 @@ contract LenderFetcherTest is Test {
     function prepareEthFork() internal {
         selectFork(Fork.Eth);
         // fund test user with tokens
-        deal(ETH_USDC, user, 10000e6);
-        deal(ETH_USDT, user, 10000e6);
-        deal(ETH_DAI, user, 10000e18);
-        vm.deal(user, 10 ether);
+        deal(ETH_USDC, user, 100000e6);
+        deal(ETH_USDT, user, 100000e6);
+        deal(ETH_DAI, user, 100000e18);
+        deal(ETH_WBTC, user, 100e8);
+        vm.deal(user, 100 ether);
     }
 
     function testSingleLenderAaveV3() public {
@@ -329,6 +360,212 @@ contract LenderFetcherTest is Test {
         assertEq(lenderId, COMP_V2_LENDER, "Lender ID should match");
         assertEq(forkId, COMP_V2_FORK, "Fork ID should match");
         assertEq(hasCollateral > 0, expectedCollateral, "Collateral flag should match expectation");
+        assertEq(hasDebt > 0, expectedDebt, "Debt flag should match expectation");
+    }
+
+    function testCompoundV3NoPositions() public {
+        prepareEthFork();
+
+        bytes memory input = abi.encodePacked(user, uint8(COMP_V3_LENDER), uint8(COMP_V3_FORK), COMET_USDC);
+        input = abi.encodePacked(uint16(input.length), input);
+
+        console.log("Input");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(abi.encodeWithSignature("bal(bytes)", input));
+        uint256 gasUsed = gas - gasleft();
+
+        assertTrue(success, "Call should succeed");
+        console.log("Gas used:", gasUsed);
+        console.log("Response length:", data.length);
+        console.log("Response");
+        console.logBytes(data);
+
+        // Verify the response format
+        // Expected: offset(32) + length(32) + blockNumber(8) = 72 bytes for no positions
+        assertTrue(data.length >= 72, "Response should contain at least the header");
+    }
+
+    function testCompoundV3WithBaseSupplyOnly() public {
+        prepareEthFork();
+
+        vm.startPrank(user);
+
+        // Supply USDC to Compound V3 (base asset)
+        IERC20(ETH_USDC).approve(COMET_USDC, type(uint256).max);
+        IComet(COMET_USDC).supply(ETH_USDC, 5000e6);
+
+        vm.stopPrank();
+
+        // Test the fetcher
+        bytes memory input = abi.encodePacked(user, uint8(COMP_V3_LENDER), uint8(COMP_V3_FORK), COMET_USDC);
+        input = abi.encodePacked(uint16(input.length), input);
+
+        console.log("Input");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(abi.encodeWithSignature("bal(bytes)", input));
+        uint256 gasUsed = gas - gasleft();
+
+        assertTrue(success, "Call should succeed");
+        console.log("Gas used:", gasUsed);
+        console.log("Response length:", data.length);
+        console.log("Response");
+        console.logBytes(data);
+
+        // Decode and verify the response - should have position but no debt
+        _verifyCompoundV3Response(data, true, false);
+    }
+
+    function testCompoundV3WithCollateralOnly() public {
+        prepareEthFork();
+
+        vm.startPrank(user);
+
+        // Supply WBTC as collateral to USDC market
+        IERC20(ETH_WBTC).approve(COMET_USDC, type(uint256).max);
+        IComet(COMET_USDC).supply(ETH_WBTC, 1e8);
+
+        vm.stopPrank();
+
+        // Test the fetcher
+        bytes memory input = abi.encodePacked(user, uint8(COMP_V3_LENDER), uint8(COMP_V3_FORK), COMET_USDC);
+        input = abi.encodePacked(uint16(input.length), input);
+
+        console.log("Input");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(abi.encodeWithSignature("bal(bytes)", input));
+        uint256 gasUsed = gas - gasleft();
+
+        assertTrue(success, "Call should succeed");
+        console.log("Gas used:", gasUsed);
+        console.log("Response length:", data.length);
+        console.log("Response");
+        console.logBytes(data);
+
+        // Decode and verify the response - should have collateral but no debt
+        _verifyCompoundV3Response(data, true, false);
+    }
+
+    function testCompoundV3WithCollateralAndDebt() public {
+        prepareEthFork();
+
+        vm.startPrank(user);
+
+        // Supply WBTC as collateral
+        IERC20(ETH_WBTC).approve(COMET_USDC, type(uint256).max);
+        IComet(COMET_USDC).supply(ETH_WBTC, 1e8);
+
+        // Borrow USDC (base asset) against WBTC collateral
+        IComet(COMET_USDC).withdraw(ETH_USDC, 2000e6);
+
+        vm.stopPrank();
+
+        // Test the fetcher
+        bytes memory input = abi.encodePacked(user, uint8(COMP_V3_LENDER), uint8(COMP_V3_FORK), COMET_USDC);
+        input = abi.encodePacked(uint16(input.length), input);
+
+        console.log("Input");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(abi.encodeWithSignature("bal(bytes)", input));
+        uint256 gasUsed = gas - gasleft();
+
+        assertTrue(success, "Call should succeed");
+        console.log("Gas used:", gasUsed);
+        console.log("Response length:", data.length);
+        console.log("Response");
+        console.logBytes(data);
+
+        // Decode and verify the response - should have both collateral and debt
+        _verifyCompoundV3Response(data, true, true);
+    }
+
+    function testCompoundV3WithMixedPositions() public {
+        prepareEthFork();
+
+        vm.startPrank(user);
+
+        // Supply base asset (USDC) - this counts as position but not collateral
+        IERC20(ETH_USDC).approve(COMET_USDC, type(uint256).max);
+        IComet(COMET_USDC).supply(ETH_USDC, 3000e6);
+
+        // Supply WBTC as collateral
+        IERC20(ETH_WBTC).approve(COMET_USDC, type(uint256).max);
+        IComet(COMET_USDC).supply(ETH_WBTC, 1e8);
+
+        // Borrow some USDC against WBTC collateral
+        IComet(COMET_USDC).withdraw(ETH_USDC, 500e6);
+
+        vm.stopPrank();
+
+        // Test the fetcher
+        bytes memory input = abi.encodePacked(user, uint8(COMP_V3_LENDER), uint8(COMP_V3_FORK), COMET_USDC);
+        input = abi.encodePacked(uint16(input.length), input);
+
+        console.log("Input");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(abi.encodeWithSignature("bal(bytes)", input));
+        uint256 gasUsed = gas - gasleft();
+
+        assertTrue(success, "Call should succeed");
+        console.log("Gas used:", gasUsed);
+        console.log("Response length:", data.length);
+        console.log("Response");
+        console.logBytes(data);
+
+        // Should have position (from both base supply and collateral) and debt
+        _verifyCompoundV3Response(data, true, true);
+    }
+
+    function _verifyCompoundV3Response(bytes memory data, bool expectedPosition, bool expectedDebt) internal pure {
+        // Decode the response
+        // Format: offset(32) + length(32) + blockNumber(8) + results(32*n)
+
+        uint256 offset = abi.decode(data, (uint256));
+        bytes memory actualData = abi.decode(data, (bytes));
+
+        console.log("Verifying Compound V3 response...");
+        console.log("Expected position:", expectedPosition);
+        console.log("Expected debt:", expectedDebt);
+
+        if (!expectedPosition && !expectedDebt) {
+            // Should only contain block number (8 bytes)
+            assertEq(actualData.length, 8, "No positions should return only block number");
+            return;
+        }
+
+        // Should contain: blockNumber(8) + result(32) = 40 bytes
+        assertEq(actualData.length, 40, "Response should contain block number and one result");
+
+        // Extract the result (last 32 bytes)
+        bytes32 result;
+        assembly {
+            result := mload(add(actualData, 40)) // 8 bytes block number + 32 bytes result
+        }
+
+        // Decode the result
+        // Format: lenderId (1byte) | forkId (1byte) | hasPosition (15bytes) | hasDebt (15bytes)
+        uint8 lenderId = uint8(result[0]);
+        uint8 forkId = uint8(result[1]);
+        uint256 hasPosition = uint256(result >> 120) & ((1 << 120) - 1);
+        uint256 hasDebt = uint256(result) & ((1 << 120) - 1);
+
+        console.log("Decoded lenderId:", lenderId);
+        console.log("Decoded forkId:", forkId);
+        console.log("Decoded hasPosition:", hasPosition);
+        console.log("Decoded hasDebt:", hasDebt);
+
+        assertEq(lenderId, COMP_V3_LENDER, "Lender ID should match");
+        assertEq(forkId, COMP_V3_FORK, "Fork ID should match");
+        assertEq(hasPosition > 0, expectedPosition, "Position flag should match expectation");
         assertEq(hasDebt > 0, expectedDebt, "Debt flag should match expectation");
     }
 }
