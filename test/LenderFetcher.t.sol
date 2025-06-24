@@ -500,7 +500,7 @@ contract LenderFetcherTest is Test {
         IComet(COMET_USDC).supply(ETH_WBTC, 1e8);
 
         // Borrow some USDC against WBTC collateral
-        IComet(COMET_USDC).withdraw(ETH_USDC, 500e6);
+        IComet(COMET_USDC).withdraw(ETH_USDC, 5000e6);
 
         vm.stopPrank();
 
