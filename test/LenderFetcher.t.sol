@@ -287,7 +287,7 @@ contract LenderFetcherTest is Test {
         _verifyCompoundV2Response(data, true, true); // hasCollateral=true, hasDebt=true
     }
 
-    function _verifyCompoundV2Response(bytes memory data, bool expectedCollateral, bool expectedDebt) internal view {
+    function _verifyCompoundV2Response(bytes memory data, bool expectedCollateral, bool expectedDebt) internal pure {
         // Decode the response
         // Format: offset(32) + length(32) + blockNumber(8) + results(32*n)
 

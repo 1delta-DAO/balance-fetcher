@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.30;
 
 library Lenders {
     uint256 internal constant AAVE_V2 = 0;
     uint256 internal constant AAVE_V3 = 1;
     uint256 internal constant COMP_V2 = 2;
+    uint256 internal constant COMP_V3 = 3;
 }
 
 library AaveForks {}
@@ -20,10 +21,15 @@ contract LenderFetcher {
     bytes32 private constant AAVE_GET_ACCOUNT_DATA = 0xbf92857c00000000000000000000000000000000000000000000000000000000;
     bytes32 private constant COMP_GET_ALL_MARKETS = 0xb0772d0b00000000000000000000000000000000000000000000000000000000;
     bytes32 private constant COMP_IS_DEPRECATED = 0x94543c1500000000000000000000000000000000000000000000000000000000;
-    bytes32 private constant COMP_BALANCE_OF_UNDERLYING =
-        0x70a0823100000000000000000000000000000000000000000000000000000000;
+    bytes32 private constant BALANCE_OF = 0x70a0823100000000000000000000000000000000000000000000000000000000;
     bytes32 private constant COMP_BORROW_BALANCE_CURRENT =
         0x95dd919300000000000000000000000000000000000000000000000000000000;
+    bytes32 private constant COMP_V3_BORROW_BALANCE_OF =
+        0x374c49b400000000000000000000000000000000000000000000000000000000;
+    bytes32 private constant COMP_V3_NUM_ASSETS = 0xa46fe83b00000000000000000000000000000000000000000000000000000000;
+    bytes32 private constant COMP_V3_GET_ASSET_INFO = 0xc8c7fe6b00000000000000000000000000000000000000000000000000000000;
+    bytes32 private constant COMP_V3_COLLATERAL_BALANCE_OF =
+        0x2b92a07d00000000000000000000000000000000000000000000000000000000;
     bytes32 private constant ERR_NO_VALUE = 0xf2365b5b00000000000000000000000000000000000000000000000000000000;
 
     error InvalidInputLength();
@@ -63,7 +69,7 @@ contract LenderFetcher {
                 result := or(result, or(shl(120, col), deb))
             }
 
-            function getCommV2Balance(currentOffset, user, lender) -> result, offset {
+            function getCompV2Balance(currentOffset, user, lender) -> result, offset {
                 let oneword := calldataload(currentOffset)
                 let fork := shr(248, oneword)
                 let comptroller := shr(96, shl(8, oneword))
@@ -100,7 +106,7 @@ contract LenderFetcher {
 
                     // check supply balance
                     if iszero(hasCollateral) {
-                        mstore(0x00, COMP_BALANCE_OF_UNDERLYING)
+                        mstore(0x00, BALANCE_OF)
                         mstore(0x04, user)
                         if staticcall(gas(), cToken, 0x00, 0x24, 0x00, 0x20) {
                             let supplyBalance := mload(0x00)
@@ -131,6 +137,73 @@ contract LenderFetcher {
                 // encode result: lenderId (1byte) | forkId (1byte) | hasCollateral (15bytes) | hasDebt (15bytes)
                 result := or(shl(248, and(lender, 0xff)), shl(240, and(fork, 0xff)))
                 result := or(result, or(shl(120, hasCollateral), hasDebt))
+            }
+
+            function getCompV3Balance(currentOffset, user, lender) -> result, offset {
+                let oneword := calldataload(currentOffset)
+                let fork := shr(248, oneword)
+                let comet := shr(96, shl(8, oneword))
+                offset := add(currentOffset, 21) // update offset
+
+                let hasCollateral := 0
+                let hasDebt := 0
+                let hasBaseSupply := 0
+
+                // check base asset supply balance
+                mstore(0x00, BALANCE_OF)
+                mstore(0x04, user)
+                if staticcall(gas(), comet, 0x00, 0x24, 0x00, 0x20) {
+                    let baseSupplyBalance := mload(0x00)
+                    if gt(baseSupplyBalance, 0) { hasBaseSupply := 1 }
+                }
+
+                // check base asset borrow balance
+                mstore(0x00, COMP_V3_BORROW_BALANCE_OF)
+                mstore(0x04, user)
+                if staticcall(gas(), comet, 0x00, 0x24, 0x00, 0x20) {
+                    let baseBorrowBalance := mload(0x00)
+                    if gt(baseBorrowBalance, 0) { hasDebt := 1 }
+                }
+
+                // get number of collateral assets
+                mstore(0x00, COMP_V3_NUM_ASSETS)
+                let numAssets := 0
+                if staticcall(gas(), comet, 0x00, 0x04, 0x00, 0x20) { numAssets := mload(0x00) }
+
+                // check collateral balances
+                if gt(numAssets, 0) {
+                    for { let i := 0 } lt(i, numAssets) { i := add(i, 1) } {
+                        // get asset info for index i
+                        mstore(0x00, COMP_V3_GET_ASSET_INFO)
+                        mstore(0x04, i)
+                        if staticcall(gas(), comet, 0x00, 0x24, 0x00, 0x40) {
+                            // asset address is at offset 0x20 in AssetInfo struct
+                            let assetAddress := mload(0x20)
+
+                            let ptr := mload(0x40)
+                            // check collateral balance for this asset
+                            mstore(ptr, COMP_V3_COLLATERAL_BALANCE_OF)
+                            mstore(add(ptr, 0x04), user)
+                            mstore(add(ptr, 0x24), assetAddress)
+                            if staticcall(gas(), comet, ptr, 0x44, 0x00, 0x20) {
+                                let collateralBalance := mload(0x00)
+                                if gt(collateralBalance, 0) {
+                                    hasCollateral := 1
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if iszero(or(or(hasCollateral, hasBaseSupply), hasDebt)) {
+                    result := 0
+                    leave
+                }
+
+                // encode result: lenderId (1byte) | forkId (1byte) | baseSupply or hasCollateral (15bytes) | hasDebt (15bytes)
+                result := or(shl(248, and(lender, 0xff)), shl(240, and(fork, 0xff)))
+                result := or(result, or(shl(120, or(hasCollateral, hasBaseSupply)), hasDebt))
             }
 
             /* *************
@@ -164,6 +237,7 @@ contract LenderFetcher {
             - 1 byte: forkId
             - For AAVE: 15 bytes totalCollateralBase | 15 bytes totalDebtBase
             - For COMP_V2: 15 bytes hasCollateral (1/0) | 15 bytes hasDebt (1/0)
+            - For COMP_V3: 15 bytes hasPosition (1/0) | 15 bytes hasDebt (1/0)
             */
 
             let firstWord := calldataload(offset)
@@ -211,7 +285,11 @@ contract LenderFetcher {
                 }
                 case 2 {
                     // COMPOUND_V2
-                    result, offset := getCommV2Balance(offset, user, lender)
+                    result, offset := getCompV2Balance(offset, user, lender)
+                }
+                case 3 {
+                    // COMPOUND_V3
+                    result, offset := getCompV3Balance(offset, user, lender)
                 }
                 default {
                     mstore(0x00, ERR_UNSUPPORTED_LENDER)
