@@ -118,8 +118,7 @@ contract BalanceFetcherTest is Test {
 
         uint256 gas = gasleft();
 
-        (bool s, bytes memory data) = address(fetcher).call(abi.encodeWithSelector(fetcher.bal.selector, input));
-        // bytes memory data = fetcher.bal(input);
+        bytes memory data = fetcher.bal(input);
         console.log("data");
         console.logBytes(data);
 
