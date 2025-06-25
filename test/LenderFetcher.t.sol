@@ -568,4 +568,111 @@ contract LenderFetcherTest is Test {
         assertEq(hasPosition > 0, expectedPosition, "Position flag should match expectation");
         assertEq(hasDebt > 0, expectedDebt, "Debt flag should match expectation");
     }
+
+    function testMultipleProtocolsInOneCall() public {
+        prepareEthFork();
+
+        vm.startPrank(user);
+
+        IERC20(ETH_USDC).approve(CUSDC, type(uint256).max);
+        IERC20(ETH_DAI).approve(CDAI, type(uint256).max);
+
+        ICToken(CUSDC).mint(3000e6);
+        ICToken(CDAI).mint(2000e18);
+        ICEther(CETH).mint{value: 2 ether}();
+
+        address[] memory markets = new address[](3);
+        markets[0] = CUSDC;
+        markets[1] = CDAI;
+        markets[2] = CETH;
+        IComptroller(COMPOUND_COMPTROLLER).enterMarkets(markets);
+
+        ICToken(CUSDC).borrow(500e6);
+
+        IERC20(ETH_WBTC).approve(COMET_USDC, type(uint256).max);
+        IComet(COMET_USDC).supply(ETH_WBTC, 0.5e8);
+        IComet(COMET_USDC).withdraw(ETH_USDC, 1000e6);
+
+        vm.stopPrank();
+
+        bytes memory input = abi.encodePacked(
+            user, //
+            uint8(COMP_V2_LENDER),
+            uint8(COMP_V2_FORK),
+            COMPOUND_COMPTROLLER,
+            uint8(COMP_V3_LENDER),
+            uint8(COMP_V3_FORK),
+            COMET_USDC
+        );
+        input = abi.encodePacked(uint16(input.length), input);
+
+        console.log("Input for multiple protocols");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(abi.encodeWithSignature("bal(bytes)", input));
+        uint256 gasUsed = gas - gasleft();
+
+        assertTrue(success, "Call should succeed");
+        console.log("Gas used:", gasUsed);
+        console.log("Response length:", data.length);
+        console.log("Response");
+        console.logBytes(data);
+
+        _verifyMultipleProtocolResponse(data);
+    }
+
+    function _verifyMultipleProtocolResponse(bytes memory data) internal pure {
+        uint256 offset = abi.decode(data, (uint256));
+        bytes memory actualData = abi.decode(data, (bytes));
+
+        console.log("Verifying multiple protocol response...");
+
+        // Should contain: blockNumber(8) + result1(32) + result2(32) = 72 bytes
+        assertEq(actualData.length, 72, "Response should contain block number and two results");
+
+        // Extract first result (Compound V2)
+        bytes32 result1;
+        assembly {
+            result1 := mload(add(actualData, 40)) // 8 bytes block number + 32 bytes first result
+        }
+
+        // Extract second result (Compound V3)
+        bytes32 result2;
+        assembly {
+            result2 := mload(add(actualData, 72)) // 8 bytes block number + 32 bytes first result + 32 bytes second result
+        }
+
+        // Verify first result (Compound V2)
+        uint8 lenderId1 = uint8(result1[0]);
+        uint8 forkId1 = uint8(result1[1]);
+        uint256 hasCollateral1 = uint256(result1 >> 120) & ((1 << 120) - 1);
+        uint256 hasDebt1 = uint256(result1) & ((1 << 120) - 1);
+
+        console.log("Result 1 - Lender ID:", lenderId1);
+        console.log("Result 1 - Fork ID:", forkId1);
+        console.log("Result 1 - Has Collateral:", hasCollateral1);
+        console.log("Result 1 - Has Debt:", hasDebt1);
+
+        assertEq(lenderId1, COMP_V2_LENDER, "First result should be Compound V2");
+        assertEq(forkId1, COMP_V2_FORK, "First result fork ID should match");
+        assertEq(hasCollateral1 > 0, true, "Compound V2 should have collateral");
+        assertEq(hasDebt1 > 0, true, "Compound V2 should have debt");
+
+        // Verify second result (Compound V3)
+        uint8 lenderId2 = uint8(result2[0]);
+        uint8 forkId2 = uint8(result2[1]);
+        uint256 hasPosition2 = uint256(result2 >> 120) & ((1 << 120) - 1);
+        uint256 hasDebt2 = uint256(result2) & ((1 << 120) - 1);
+
+        console.log("Result 2 - Lender ID:", lenderId2);
+        console.log("Result 2 - Fork ID:", forkId2);
+        console.log("Result 2 - Has Position:", hasPosition2);
+        console.log("Result 2 - Has Debt:", hasDebt2);
+
+        assertEq(lenderId2, COMP_V3_LENDER, "Second result should be Compound V3");
+        assertEq(forkId2, COMP_V3_FORK, "Second result fork ID should match");
+        assertEq(hasPosition2 > 0, true, "Compound V3 should have position");
+        assertEq(hasDebt2 > 0, true, "Compound V3 should have debt");
+    }
 }
