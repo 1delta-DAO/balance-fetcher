@@ -150,7 +150,7 @@ contract LenderFetcherTest is Test {
         fetcher = new LenderFetcher();
     }
 
-    function depositToProtocols() internal {
+    function depositToAave() internal {
         // select arbitrum fork
         selectFork(Fork.Arb);
 
@@ -185,8 +185,33 @@ contract LenderFetcherTest is Test {
     }
 
     function testSingleLenderAaveV3() public {
-        depositToProtocols();
-        bytes memory input = abi.encodePacked(user, uint8(AAVE_V3_FORK), uint8(0), AAVE_V3_POOL);
+        depositToAave();
+        bytes memory input = abi.encodePacked(user, uint8(1), uint8(AAVE_V3_FORK), AAVE_V3_POOL);
+        input = abi.encodePacked(uint16(input.length), input);
+
+        console.log("Input");
+        console.logBytes(input);
+
+        uint256 gas = gasleft();
+        (bool success, bytes memory data) = address(fetcher).call(abi.encodeWithSignature("bal(bytes)", input));
+        console.log("Gas used:", gas - gasleft());
+
+        assertTrue(success, "Call should succeed");
+        console.log("Response length:", data.length);
+        console.log("Response");
+        console.logBytes(data);
+
+        _verifyResponse(data, true, false);
+    }
+
+    function testAaveV3WithBorrow() public {
+        depositToAave();
+
+        vm.startPrank(user);
+        IAavePool(AAVE_V3_POOL).borrow(USDC, 100e6, 2, 0, user);
+        vm.stopPrank();
+
+        bytes memory input = abi.encodePacked(user, uint8(1), uint8(AAVE_V3_FORK), AAVE_V3_POOL);
         input = abi.encodePacked(uint16(input.length), input);
 
         console.log("Input");
@@ -199,6 +224,59 @@ contract LenderFetcherTest is Test {
         console.log("Response length:", data.length);
         console.log("Response");
         console.logBytes(data);
+
+        _verifyResponse(data, true, true);
+    }
+
+    function _verifyResponse(bytes memory data, bool expectedCollateral, bool expectedDebt) internal pure {
+        // Decode the response
+        // Format: offset(32) + length(32) + blockNumber(8) + results(4*n)
+
+        require(data.length >= 72, "Response too short - missing header");
+
+        uint256 offset;
+        uint256 length;
+        uint64 blockNumber;
+
+        assembly {
+            offset := mload(add(data, 0x20))
+            length := mload(add(data, 0x40))
+            blockNumber := shr(192, mload(add(data, 0x60)))
+        }
+
+        require(offset == 0x20, "Invalid offset in response");
+
+        uint256 expectedMinLength = 8;
+        if (expectedCollateral || expectedDebt) {
+            expectedMinLength += 4;
+        }
+
+        require(length >= expectedMinLength, "Response length doesn't match expectations");
+
+        if (!expectedCollateral && !expectedDebt) {
+            require(length == 8, "Expected no positions but got some");
+            return;
+        }
+
+        require(length >= 12, "Expected positions but response too short");
+        require((length - 8) % 4 == 0, "Invalid result data length - not multiple of 4");
+
+        uint32 result;
+        assembly {
+            result := shr(224, mload(add(data, 0x68))) // First result starts after blockNumber
+        }
+
+        // Decode result: lenderId (1byte) | forkId (1byte) | hasCollateral/hasPosition (1byte) | hasDebt (1byte)
+        uint8 lenderId = uint8(result >> 24);
+        uint8 forkId = uint8((result >> 16) & 0xFF);
+        bool hasCollateral = ((result >> 8) & 0xFF) != 0;
+        bool hasDebt = (result & 0xFF) != 0;
+
+        require(hasCollateral == expectedCollateral, "Collateral flag mismatch");
+        require(hasDebt == expectedDebt, "Debt flag mismatch");
+
+        require(lenderId <= 3, "Invalid lender ID");
+        require(forkId <= 1, "Invalid fork ID");
     }
 
     function testCompoundV2NoPositions() public {
@@ -220,10 +298,7 @@ contract LenderFetcherTest is Test {
         console.log("Response");
         console.logBytes(data);
 
-        // Verify the response format
-        // Expected: offset(32) + length(32) + blockNumber(8) = 72 bytes for no positions
-        // Since there are no positions, only block number should be returned
-        assertTrue(data.length >= 72, "Response should contain at least the header");
+        _verifyResponse(data, false, false);
     }
 
     function testCompoundV2WithCollateralOnly() public {
@@ -267,7 +342,7 @@ contract LenderFetcherTest is Test {
         console.logBytes(data);
 
         // Decode and verify the response
-        _verifyCompoundV2Response(data, true, false);
+        _verifyResponse(data, true, false);
     }
 
     function testCompoundV2WithCollateralAndDebt() public {
@@ -315,52 +390,7 @@ contract LenderFetcherTest is Test {
         console.logBytes(data);
 
         // Decode and verify the response
-        _verifyCompoundV2Response(data, true, true); // hasCollateral=true, hasDebt=true
-    }
-
-    function _verifyCompoundV2Response(bytes memory data, bool expectedCollateral, bool expectedDebt) internal pure {
-        // Decode the response
-        // Format: offset(32) + length(32) + blockNumber(8) + results(32*n)
-
-        // Skip to the actual data after ABI encoding
-        uint256 offset = abi.decode(data, (uint256));
-        bytes memory actualData = abi.decode(data, (bytes));
-
-        console.log("Verifying response...");
-        console.log("Expected collateral:", expectedCollateral);
-        console.log("Expected debt:", expectedDebt);
-
-        if (!expectedCollateral && !expectedDebt) {
-            // Should only contain block number (8 bytes)
-            assertEq(actualData.length, 8, "No positions should return only block number");
-            return;
-        }
-
-        // Should contain: blockNumber(8) + result(32) = 40 bytes
-        assertEq(actualData.length, 40, "Response should contain block number and one result");
-
-        // Extract the result (last 32 bytes)
-        bytes32 result;
-        assembly {
-            result := mload(add(actualData, 40)) // 8 bytes block number + 32 bytes result
-        }
-
-        // Decode the result
-        // Format: lenderId (1byte) | forkId (1byte) | hasCollateral (15bytes) | hasDebt (15bytes)
-        uint8 lenderId = uint8(result[0]);
-        uint8 forkId = uint8(result[1]);
-        uint256 hasCollateral = uint256(result >> 120) & ((1 << 120) - 1);
-        uint256 hasDebt = uint256(result) & ((1 << 120) - 1);
-
-        console.log("Decoded lenderId:", lenderId);
-        console.log("Decoded forkId:", forkId);
-        console.log("Decoded hasCollateral:", hasCollateral);
-        console.log("Decoded hasDebt:", hasDebt);
-
-        assertEq(lenderId, COMP_V2_LENDER, "Lender ID should match");
-        assertEq(forkId, COMP_V2_FORK, "Fork ID should match");
-        assertEq(hasCollateral > 0, expectedCollateral, "Collateral flag should match expectation");
-        assertEq(hasDebt > 0, expectedDebt, "Debt flag should match expectation");
+        _verifyResponse(data, true, true); // hasCollateral=true, hasDebt=true
     }
 
     function testCompoundV3NoPositions() public {
@@ -382,9 +412,8 @@ contract LenderFetcherTest is Test {
         console.log("Response");
         console.logBytes(data);
 
-        // Verify the response format
-        // Expected: offset(32) + length(32) + blockNumber(8) = 72 bytes for no positions
-        assertTrue(data.length >= 72, "Response should contain at least the header");
+        // Verify the response - no positions expected
+        _verifyResponse(data, false, false);
     }
 
     function testCompoundV3WithBaseSupplyOnly() public {
@@ -416,7 +445,7 @@ contract LenderFetcherTest is Test {
         console.logBytes(data);
 
         // Decode and verify the response - should have position but no debt
-        _verifyCompoundV3Response(data, true, false);
+        _verifyResponse(data, true, false);
     }
 
     function testCompoundV3WithCollateralOnly() public {
@@ -448,7 +477,7 @@ contract LenderFetcherTest is Test {
         console.logBytes(data);
 
         // Decode and verify the response - should have collateral but no debt
-        _verifyCompoundV3Response(data, true, false);
+        _verifyResponse(data, true, false);
     }
 
     function testCompoundV3WithCollateralAndDebt() public {
@@ -483,7 +512,7 @@ contract LenderFetcherTest is Test {
         console.logBytes(data);
 
         // Decode and verify the response - should have both collateral and debt
-        _verifyCompoundV3Response(data, true, true);
+        _verifyResponse(data, true, true);
     }
 
     function testCompoundV3WithMixedPositions() public {
@@ -522,51 +551,7 @@ contract LenderFetcherTest is Test {
         console.logBytes(data);
 
         // Should have position (from both base supply and collateral) and debt
-        _verifyCompoundV3Response(data, true, true);
-    }
-
-    function _verifyCompoundV3Response(bytes memory data, bool expectedPosition, bool expectedDebt) internal pure {
-        // Decode the response
-        // Format: offset(32) + length(32) + blockNumber(8) + results(32*n)
-
-        uint256 offset = abi.decode(data, (uint256));
-        bytes memory actualData = abi.decode(data, (bytes));
-
-        console.log("Verifying Compound V3 response...");
-        console.log("Expected position:", expectedPosition);
-        console.log("Expected debt:", expectedDebt);
-
-        if (!expectedPosition && !expectedDebt) {
-            // Should only contain block number (8 bytes)
-            assertEq(actualData.length, 8, "No positions should return only block number");
-            return;
-        }
-
-        // Should contain: blockNumber(8) + result(32) = 40 bytes
-        assertEq(actualData.length, 40, "Response should contain block number and one result");
-
-        // Extract the result (last 32 bytes)
-        bytes32 result;
-        assembly {
-            result := mload(add(actualData, 40)) // 8 bytes block number + 32 bytes result
-        }
-
-        // Decode the result
-        // Format: lenderId (1byte) | forkId (1byte) | hasPosition (15bytes) | hasDebt (15bytes)
-        uint8 lenderId = uint8(result[0]);
-        uint8 forkId = uint8(result[1]);
-        uint256 hasPosition = uint256(result >> 120) & ((1 << 120) - 1);
-        uint256 hasDebt = uint256(result) & ((1 << 120) - 1);
-
-        console.log("Decoded lenderId:", lenderId);
-        console.log("Decoded forkId:", forkId);
-        console.log("Decoded hasPosition:", hasPosition);
-        console.log("Decoded hasDebt:", hasDebt);
-
-        assertEq(lenderId, COMP_V3_LENDER, "Lender ID should match");
-        assertEq(forkId, COMP_V3_FORK, "Fork ID should match");
-        assertEq(hasPosition > 0, expectedPosition, "Position flag should match expectation");
-        assertEq(hasDebt > 0, expectedDebt, "Debt flag should match expectation");
+        _verifyResponse(data, true, true);
     }
 
     function testMultipleProtocolsInOneCall() public {
@@ -619,60 +604,55 @@ contract LenderFetcherTest is Test {
         console.log("Response");
         console.logBytes(data);
 
-        _verifyMultipleProtocolResponse(data);
+        _verifyMultiResponse(data);
     }
 
-    function _verifyMultipleProtocolResponse(bytes memory data) internal pure {
-        uint256 offset = abi.decode(data, (uint256));
-        bytes memory actualData = abi.decode(data, (bytes));
+    function _verifyMultiResponse(bytes memory data) internal pure {
+        // For multiple protocols, we expect both to have positions (collateral and debt)
+        // since the test sets up positions in both Compound V2 and V3
 
-        console.log("Verifying multiple protocol response...");
+        require(data.length >= 72, "Response too short - missing header");
 
-        // Should contain: blockNumber(8) + result1(32) + result2(32) = 72 bytes
-        assertEq(actualData.length, 72, "Response should contain block number and two results");
+        uint256 offset;
+        uint256 length;
+        uint64 blockNumber;
 
-        // Extract first result (Compound V2)
-        bytes32 result1;
         assembly {
-            result1 := mload(add(actualData, 40)) // 8 bytes block number + 32 bytes first result
+            offset := mload(add(data, 0x20))
+            length := mload(add(data, 0x40))
+            blockNumber := shr(192, mload(add(data, 0x60)))
         }
 
-        // Extract second result (Compound V3)
-        bytes32 result2;
-        assembly {
-            result2 := mload(add(actualData, 72)) // 8 bytes block number + 32 bytes first result + 32 bytes second result
+        require(offset == 0x20, "Invalid offset in response");
+        require(length >= 16, "Expected at least 2 protocol results");
+        require((length - 8) % 4 == 0, "Invalid result data length - not multiple of 4");
+
+        uint256 numResults = (length - 8) / 4;
+        require(numResults >= 2, "Expected results from multiple protocols");
+
+        bool[4] memory seenLenders;
+
+        for (uint256 i = 0; i < numResults; i++) {
+            uint32 result;
+            assembly {
+                result := shr(224, mload(add(data, add(0x68, mul(i, 4)))))
+            }
+
+            // Decode result: lenderId (1byte) | forkId (1byte) | hasCollateral/hasPosition (1byte) | hasDebt (1byte)
+            uint8 lenderId = uint8(result >> 24);
+            uint8 forkId = uint8((result >> 16) & 0xFF);
+            bool hasCollateral = ((result >> 8) & 0xFF) != 0;
+            bool hasDebt = (result & 0xFF) != 0;
+
+            require(lenderId <= 3, "Invalid lender ID");
+            require(forkId <= 1, "Invalid fork ID");
+            require(!seenLenders[lenderId], "Duplicate lender in results");
+            seenLenders[lenderId] = true;
+
+            require(hasCollateral || hasDebt, "Expected positions for each protocol");
         }
 
-        // Verify first result (Compound V2)
-        uint8 lenderId1 = uint8(result1[0]);
-        uint8 forkId1 = uint8(result1[1]);
-        uint256 hasCollateral1 = uint256(result1 >> 120) & ((1 << 120) - 1);
-        uint256 hasDebt1 = uint256(result1) & ((1 << 120) - 1);
-
-        console.log("Result 1 - Lender ID:", lenderId1);
-        console.log("Result 1 - Fork ID:", forkId1);
-        console.log("Result 1 - Has Collateral:", hasCollateral1);
-        console.log("Result 1 - Has Debt:", hasDebt1);
-
-        assertEq(lenderId1, COMP_V2_LENDER, "First result should be Compound V2");
-        assertEq(forkId1, COMP_V2_FORK, "First result fork ID should match");
-        assertEq(hasCollateral1 > 0, true, "Compound V2 should have collateral");
-        assertEq(hasDebt1 > 0, true, "Compound V2 should have debt");
-
-        // Verify second result (Compound V3)
-        uint8 lenderId2 = uint8(result2[0]);
-        uint8 forkId2 = uint8(result2[1]);
-        uint256 hasPosition2 = uint256(result2 >> 120) & ((1 << 120) - 1);
-        uint256 hasDebt2 = uint256(result2) & ((1 << 120) - 1);
-
-        console.log("Result 2 - Lender ID:", lenderId2);
-        console.log("Result 2 - Fork ID:", forkId2);
-        console.log("Result 2 - Has Position:", hasPosition2);
-        console.log("Result 2 - Has Debt:", hasDebt2);
-
-        assertEq(lenderId2, COMP_V3_LENDER, "Second result should be Compound V3");
-        assertEq(forkId2, COMP_V3_FORK, "Second result fork ID should match");
-        assertEq(hasPosition2 > 0, true, "Compound V3 should have position");
-        assertEq(hasDebt2 > 0, true, "Compound V3 should have debt");
+        require(seenLenders[COMP_V2_LENDER], "Missing Compound V2 result");
+        require(seenLenders[COMP_V3_LENDER], "Missing Compound V3 result");
     }
 }

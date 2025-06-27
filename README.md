@@ -123,20 +123,28 @@ bytes memory input = abi.encodePacked(
 The contract returns:
 
 ```
-[8 bytes: block number][32 bytes: result1][32 bytes: result2]...
+[8 bytes: block number][4 bytes: result1][4 bytes: result2]...
 ```
 
-Each 32-byte result contains:
+Each 4-byte result contains:
 
 ```
-[1 byte: lenderId][1 byte: forkId][15 bytes: position flags][15 bytes: debt flags]
+[1 byte: lenderId][1 byte: forkId][1 byte: hasCollateral/hasPosition flag][1 byte: hasDebt flag]
 ```
 
-#### Position Flag Meanings
+#### Flag Meanings
 
-- **Aave V2/V3**: `totalCollateralBase` | `totalDebtBase` (actual amounts)
-- **Compound V2**: `hasCollateral` (1/0) | `hasDebt` (1/0) (boolean flags)
-- **Compound V3**: `hasPosition` (1/0) | `hasDebt` (1/0) (boolean flags)
+All protocols now return standardized boolean flags (1 for true, 0 for false):
+
+- **Aave V2/V3**: `hasCollateral` (1/0) | `hasDebt` (1/0)
+- **Compound V2**: `hasCollateral` (1/0) | `hasDebt` (1/0)
+- **Compound V3**: `hasPosition` (1/0) | `hasDebt` (1/0)
+
+Where:
+
+- `hasCollateral`: User has supplied assets as collateral
+- `hasPosition`: User has any position (supply or collateral) in the protocol
+- `hasDebt`: User has borrowed assets
 
 **Note**: Only protocols where the user has positions (non-zero collateral or debt) are included in the response.
 
@@ -151,6 +159,24 @@ Each 32-byte result contains:
 // Parse results
 if (success && data.length > 72) { // 32 offset + 32 length + 8 block number
     // User has positions in one or more protocols
-    // Decode each 32-byte result to check specific protocols
+    // Decode each 4-byte result to check specific protocols
+
+    // Example: Extract first result
+    bytes memory actualData = abi.decode(data, (bytes));
+    if (actualData.length >= 12) { // 8 bytes block number + 4 bytes result
+        uint32 result;
+        assembly {
+            result := shr(224, mload(add(actualData, 12)))
+        }
+
+        uint8 lenderId = uint8(result >> 24);
+        uint8 forkId = uint8(result >> 16);
+        uint8 hasCollateral = uint8(result >> 8);
+        uint8 hasDebt = uint8(result);
+
+        // Check if user has collateral or debt
+        bool userHasCollateral = hasCollateral == 1;
+        bool userHasDebt = hasDebt == 1;
+    }
 }
 ```

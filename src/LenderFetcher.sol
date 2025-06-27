@@ -11,9 +11,6 @@ library Lenders {
 library AaveForks {}
 
 contract LenderFetcher {
-    uint256 private constant UINT128_MAX = 0xffffffffffffffffffffffffffffffff;
-    uint256 private constant UINT120_MAX = 0xffffffffffffffffffffffffffffff;
-
     bytes32 private constant ERR_CALL_FAILED = 0x3204506f00000000000000000000000000000000000000000000000000000000;
     bytes32 private constant ERR_INVALID_INPUT_LENGTH =
         0x7db491eb00000000000000000000000000000000000000000000000000000000;
@@ -61,12 +58,20 @@ contract LenderFetcher {
                     mstore(0x00, ERR_CALL_FAILED)
                     revert(0x00, 0x04)
                 }
-                let col := and(UINT120_MAX, mload(0x100))
-                let deb := and(UINT120_MAX, mload(0x120))
-                if and(iszero(col), iszero(deb)) { result := 0 }
-                // lenderId (1byte) | forkId (1byte) | totalCollateralBase (15bytes) | totalDebtBase (15bytes)
-                result := or(shl(248, and(lender, 0xff)), shl(240, and(fork, 0xff)))
-                result := or(result, or(shl(120, col), deb))
+                let col := mload(0x100)
+                let deb := mload(0x120)
+
+                let hasCollateral := gt(col, 0)
+                let hasDebt := gt(deb, 0)
+
+                if iszero(or(hasCollateral, hasDebt)) {
+                    result := 0
+                    leave
+                }
+
+                // lenderId (1byte) | forkId (1byte) | hasCollateral (1byte) | hasDebt (1byte)
+                result := or(shl(24, and(lender, 0xff)), shl(16, and(fork, 0xff)))
+                result := or(result, or(shl(8, hasCollateral), hasDebt))
             }
 
             function getCompV2Balance(currentOffset, user, lender) -> result, offset {
@@ -129,14 +134,14 @@ contract LenderFetcher {
                 }
 
                 // if no positions found, return 0
-                if and(iszero(hasCollateral), iszero(hasDebt)) {
+                if iszero(or(hasCollateral, hasDebt)) {
                     result := 0
                     leave
                 }
 
-                // encode result: lenderId (1byte) | forkId (1byte) | hasCollateral (15bytes) | hasDebt (15bytes)
-                result := or(shl(248, and(lender, 0xff)), shl(240, and(fork, 0xff)))
-                result := or(result, or(shl(120, hasCollateral), hasDebt))
+                // encode result: lenderId (1byte) | forkId (1byte) | hasCollateral (1byte) | hasDebt (1byte)
+                result := or(shl(24, and(lender, 0xff)), shl(16, and(fork, 0xff)))
+                result := or(result, or(shl(8, hasCollateral), hasDebt))
             }
 
             function getCompV3Balance(currentOffset, user, lender) -> result, offset {
@@ -201,9 +206,10 @@ contract LenderFetcher {
                     leave
                 }
 
-                // encode result: lenderId (1byte) | forkId (1byte) | baseSupply or hasCollateral (15bytes) | hasDebt (15bytes)
-                result := or(shl(248, and(lender, 0xff)), shl(240, and(fork, 0xff)))
-                result := or(result, or(shl(120, or(hasCollateral, hasBaseSupply)), hasDebt))
+                // encode result: lenderId (1byte) | forkId (1byte) | hasPosition (1byte) | hasDebt (1byte)
+                let hasPosition := or(hasCollateral, hasBaseSupply)
+                result := or(shl(24, and(lender, 0xff)), shl(16, and(fork, 0xff)))
+                result := or(result, or(shl(8, hasPosition), hasDebt))
             }
 
             /* *************
@@ -227,23 +233,22 @@ contract LenderFetcher {
             - 20 bytes: pool/comptroller address
 
             output:
-            - 16 bytes: block number
-            - 32 bytes: result0
-            - 32 bytes: result1
+            - 8 bytes: block number
+            - 4 bytes: result0
+            - 4 bytes: result1
             - ...
 
             result encoding:
             - 1 byte: lenderId
             - 1 byte: forkId
-            - For AAVE: 15 bytes totalCollateralBase | 15 bytes totalDebtBase
-            - For COMP_V2: 15 bytes hasCollateral (1/0) | 15 bytes hasDebt (1/0)
-            - For COMP_V3: 15 bytes hasPosition (1/0) | 15 bytes hasDebt (1/0)
+            - 1 byte: hasCollateral/hasPosition flag (1/0)
+            - 1 byte: hasDebt flag (1/0)
             */
 
             let firstWord := calldataload(offset)
             // the first 16 bytes is the input length (can't use mload(0x24) here because of possible zero padding for alignment)
             let inputLength := shr(240, firstWord)
-            // reserve 0xff bytes
+            // reserve memory for max results length
             mstore(
                 0x40,
                 add(
@@ -255,7 +260,7 @@ contract LenderFetcher {
                                 sub(inputLength, 36), // subtract the user address and input length
                                 22 // divide by 22 which is the required data length for each fork
                             ),
-                            32 // each result length
+                            4 // each result length
                         )
                     )
                 )
@@ -298,8 +303,8 @@ contract LenderFetcher {
 
                 if iszero(result) { continue } // save only none-zero results
 
-                mstore(currentPtr, result)
-                currentPtr := add(currentPtr, 0x20) // skip result
+                mstore(currentPtr, shl(224, result))
+                currentPtr := add(currentPtr, 4)
             }
 
             // Update free memory pointer (align to 32 bytes)
