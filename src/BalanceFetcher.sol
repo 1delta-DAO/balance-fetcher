@@ -61,7 +61,9 @@ contract BalanceFetcher {
             if or(iszero(numTokens), iszero(numAddresses)) { revertInvalidInputLength() }
 
             // revert if input lenfth is incorrect
-            if xor(inputLength, add(4, add(mul(numTokens, 20), mul(numAddresses, 20)))) { revertInvalidInputLength() }
+            if xor(inputLength, add(4, add(mul(numTokens, 20), mul(numAddresses, 20)))) {
+                revertInvalidInputLength()
+            }
 
             /*
             Data structure:
